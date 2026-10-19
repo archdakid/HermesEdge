@@ -2,12 +2,14 @@ import Foundation
 import Combine
 
 /// Real-time on-device logger and crash diagnostics recorder.
+/// Synchronously callable from any thread or actor.
 /// Writes all application logs and fatal exceptions to `Documents/debug.log` and `Documents/crash.log`.
-@MainActor
-public final class AppLogger: ObservableObject {
+public final class AppLogger: ObservableObject, @unchecked Sendable {
     public static let shared = AppLogger()
 
     @Published public private(set) var recentLogs: [String] = []
+
+    private let lock = NSLock()
 
     private var logFileURL: URL {
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
@@ -36,22 +38,29 @@ public final class AppLogger: ObservableObject {
     }
 
     /// Logs a formatted message to console, memory buffer, and Documents/debug.log.
+    /// Thread-safe and synchronously callable from any context.
     public func log(_ message: String, tag: String = "SYSTEM") {
         let timestamp = dateFormatter.string(from: Date())
         let formatted = "[\(timestamp)][\(tag)] \(message)"
         
         print(formatted)
-        recentLogs.append(formatted)
-        if recentLogs.count > 300 {
-            recentLogs.removeFirst(50)
-        }
 
-        // Append to Documents/debug.log
+        lock.lock()
         appendToFile(formatted + "\n", url: logFileURL)
+        lock.unlock()
+
+        Task { @MainActor in
+            self.recentLogs.append(formatted)
+            if self.recentLogs.count > 300 {
+                self.recentLogs.removeFirst(50)
+            }
+        }
     }
 
     /// Reads the entire debug log from disk.
     public func readLogFile() -> String {
+        lock.lock()
+        defer { lock.unlock() }
         return (try? String(contentsOf: logFileURL, encoding: .utf8)) ?? recentLogs.joined(separator: "\n")
     }
 
@@ -68,7 +77,11 @@ public final class AppLogger: ObservableObject {
 
     /// Clears all logs.
     public func clearLogs() {
-        recentLogs.removeAll()
+        lock.lock()
+        defer { lock.unlock() }
+        Task { @MainActor in
+            self.recentLogs.removeAll()
+        }
         try? "".write(to: logFileURL, atomically: true, encoding: .utf8)
     }
 
@@ -93,7 +106,7 @@ public final class AppLogger: ObservableObject {
         }
     }
 
-    /// Installs system-level NSException and POSIX signal handlers to record fatal crashes.
+    /// Installs system-level NSException handlers to record fatal crashes.
     public func installCrashHandler() {
         NSSetUncaughtExceptionHandler { exception in
             let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
