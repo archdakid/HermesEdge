@@ -5,11 +5,11 @@ import AppIntents
 /// On iOS 17/18 with A17 Pro, Siri speech-to-text and intent resolution run entirely on-device without internet.
 @available(iOS 16.0, macOS 13.0, *)
 public struct AskHermesIntent: AppIntent {
-    public static var title: LocalizedStringResource = "Ask Hermes"
-    public static var description = IntentDescription("Speak to your offline on-device AI assistant to answer questions or automate tasks.")
+    public static let title: LocalizedStringResource = "Ask Hermes"
+    public static let description = IntentDescription("Speak to your offline on-device AI assistant to answer questions or automate tasks.")
 
     // Configured to run in the background without launching the full app UI
-    public static var openAppWhenRun: Bool = false
+    public static let openAppWhenRun: Bool = false
 
     @Parameter(title: "Prompt", description: "What would you like Hermes to do?")
     public var prompt: String
@@ -20,7 +20,7 @@ public struct AskHermesIntent: AppIntent {
         self.prompt = prompt
     }
 
-    public func perform() async throws -> some ProvidesDialog & ShowsSnippetView {
+    public func perform() async throws -> some ProvidesDialog {
         let conversationId = "siri-session"
         let userMessage = MessageEnvelope(
             conversationId: conversationId,
@@ -37,7 +37,7 @@ public struct AskHermesIntent: AppIntent {
 
         let store = PersistBeforeExecuteStore()
         let memory = MemoryManager()
-        let engine = MockEdgeEngine() // Bound to local quantized Gemma 4B on device
+        let engine = GemmaMetalEngine()
 
         let agent = AgentStateMachine(
             toolRegistry: tools,

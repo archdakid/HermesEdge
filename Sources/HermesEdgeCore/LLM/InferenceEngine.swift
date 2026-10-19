@@ -38,7 +38,7 @@ public final class GemmaMetalEngine: InferenceEngine, @unchecked Sendable {
     private var isLoaded: Bool = false
     private let toolParser = HermesToolParser()
 
-    public init(modelURL: URL = ModelManager.shared.modelLocalURL) {
+    public init(modelURL: URL = ModelManager.defaultModelLocalURL) {
         self.modelURL = modelURL
     }
 

@@ -24,13 +24,17 @@ public final class ModelManager: NSObject, ObservableObject, URLSessionDownloadD
         return URLSession(configuration: config, delegate: self, delegateQueue: nil)
     }()
 
-    public var modelLocalURL: URL {
+    public static var defaultModelLocalURL: URL {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         let modelsDir = appSupport.appendingPathComponent("models", isDirectory: true)
         if !FileManager.default.fileExists(atPath: modelsDir.path) {
             try? FileManager.default.createDirectory(at: modelsDir, withIntermediateDirectories: true)
         }
-        return modelsDir.appendingPathComponent(Self.modelFilename)
+        return modelsDir.appendingPathComponent(modelFilename)
+    }
+
+    public nonisolated var modelLocalURL: URL {
+        Self.defaultModelLocalURL
     }
 
     public override init() {
@@ -98,8 +102,7 @@ public final class ModelManager: NSObject, ObservableObject, URLSessionDownloadD
         didFinishDownloadingTo location: URL
     ) {
         do {
-            let targetURL = Task { @MainActor in self.modelLocalURL }
-            let finalPath = await targetURL
+            let finalPath = self.modelLocalURL
 
             if FileManager.default.fileExists(atPath: finalPath.path) {
                 try FileManager.default.removeItem(at: finalPath)
