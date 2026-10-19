@@ -9,6 +9,7 @@ on:
     paths:
       - 'Sources/**'
       - 'Package.swift'
+      - 'project.yml'
       - 'xtool.yml'
       - '.github/workflows/ios-unsigned-ipa.yml'
 
@@ -16,7 +17,7 @@ jobs:
   build-unsigned-ipa:
     name: Build Unsigned iOS .ipa on macOS 15
     runs-on: macos-15
-    timeout-minutes: 20
+    timeout-minutes: 15
 
     steps:
       - name: Checkout repository
@@ -27,34 +28,43 @@ jobs:
           sudo xcode-select -s /Applications/Xcode_16.2.app || sudo xcode-select -s /Applications/Xcode_16.app || sudo xcode-select -s /Applications/Xcode.app
           xcodebuild -version
 
-      - name: Install and Configure xtool with Local Xcode
+      - name: Install XcodeGen
         run: |
-          curl -sL https://github.com/xtool-org/xtool/releases/download/1.22.2/xtool.app.zip -o xtool.app.zip
-          unzip -q xtool.app.zip
-          xattr -cr xtool.app
-          sudo cp -R xtool.app /Applications/
-          sudo ln -s /Applications/xtool.app/Contents/MacOS/xtool /usr/local/bin/xtool
-          
-          # Initialize SDK using pre-installed Xcode.app
-          XCODE_APP=$(xcode-select -p | sed 's|/Contents/Developer||')
-          echo "Using Xcode app at: $XCODE_APP"
-          /usr/local/bin/xtool sdk install "$XCODE_APP" --slim || true
+          brew install xcodegen || true
 
-      - name: Build Unsigned IPA via xtool
+      - name: Generate Xcode Project
         run: |
-          /usr/local/bin/xtool dev build --configuration release --ipa
+          xcodegen generate
 
-      - name: Locate and Package HermesEdge-unsigned.ipa
+      - name: Build iOS Application via xcodebuild
         run: |
-          find . -name "*.ipa" -ls
-          IPA_PATH=$(find . -name "*.ipa" -type f | head -n 1)
-          if [ -n "$IPA_PATH" ]; then
-            echo "Found IPA at: $IPA_PATH"
-            cp "$IPA_PATH" HermesEdge-unsigned.ipa
-          else
-            echo "Error: Could not locate built .ipa file"
+          xcodebuild \
+            -project HermesEdge.xcodeproj \
+            -scheme HermesEdge \
+            -destination "generic/platform=iOS" \
+            -configuration Release \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            AD_HOC_CODE_SIGNING_ALLOWED=YES \
+            COMPILER_INDEX_STORE_ENABLE=NO
+
+      - name: Package Payload into HermesEdge-unsigned.ipa
+        run: |
+          APP_PATH=$(find build/Build/Products -name "*.app" -type d | head -n 1)
+          if [ -z "$APP_PATH" ]; then
+            echo "Error: Could not locate built .app bundle"
             exit 1
           fi
+          echo "Found app bundle at: $APP_PATH"
+
+          mkdir -p ipa_stage/Payload
+          cp -R "$APP_PATH" ipa_stage/Payload/
+          cd ipa_stage
+          zip -qry ../HermesEdge-unsigned.ipa Payload
+          cd ..
+          ls -lh HermesEdge-unsigned.ipa
 
       - name: Upload Unsigned IPA Artifact for xtool Sideloading
         uses: actions/upload-artifact@v4

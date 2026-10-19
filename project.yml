@@ -1,0 +1,25 @@
+name: HermesEdge
+options:
+  bundleIdPrefix: com.quincearch
+  deploymentTarget:
+    iOS: "18.0"
+targets:
+  HermesEdge:
+    type: application
+    platform: iOS
+    deploymentTarget: "18.0"
+    sources:
+      - path: Sources/HermesEdgeApp
+      - path: Sources/HermesEdgeCore
+    info:
+      path: Sources/HermesEdgeApp/Info.plist
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.quincearch.HermesEdge
+        GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_FILE: Sources/HermesEdgeApp/Info.plist
+        CODE_SIGNING_ALLOWED: NO
+        CODE_SIGNING_REQUIRED: NO
+        CODE_SIGN_IDENTITY: ""
+        AD_HOC_CODE_SIGNING_ALLOWED: YES
+        SWIFT_VERSION: "6.0"
