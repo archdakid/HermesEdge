@@ -7,8 +7,8 @@ import Combine
 public final class ModelManager: NSObject, ObservableObject, URLSessionDownloadDelegate, @unchecked Sendable {
     public static let shared = ModelManager()
 
-    public static let modelFilename = "gemma-4-E4B-it-Q4_K_M.gguf"
-    public static let defaultDownloadURL = URL(string: "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-Q4_K_M.gguf")!
+    public nonisolated static let modelFilename = "gemma-4-E4B-it-Q4_K_M.gguf"
+    public nonisolated static let defaultDownloadURL = URL(string: "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-Q4_K_M.gguf")!
 
     @Published public private(set) var isModelReady: Bool = false
     @Published public private(set) var isDownloading: Bool = false
