@@ -8,7 +8,8 @@ let package = Package(
         .macOS(.v15)
     ],
     products: [
-        .executable(
+        // An xtool project must contain exactly one library product representing the main app
+        .library(
             name: "HermesEdgeApp",
             targets: ["HermesEdgeApp"]
         ),
@@ -23,7 +24,7 @@ let package = Package(
             dependencies: [],
             path: "Sources/HermesEdgeCore"
         ),
-        .executableTarget(
+        .target(
             name: "HermesEdgeApp",
             dependencies: ["HermesEdgeCore"],
             path: "Sources/HermesEdgeApp"

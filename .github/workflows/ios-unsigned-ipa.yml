@@ -26,34 +26,35 @@ jobs:
         run: |
           sudo xcode-select -s /Applications/Xcode_16.2.app || sudo xcode-select -s /Applications/Xcode_16.app || sudo xcode-select -s /Applications/Xcode.app
           xcodebuild -version
-          swift --version
 
-      - name: Build Unsigned iOS Binary via SwiftPM
+      - name: Install and Configure xtool with Local Xcode
         run: |
-          SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
-          echo "Using iOS SDK at: $SDK_PATH"
-          swift build -c release --triple arm64-apple-ios18.0 --sdk "$SDK_PATH"
+          curl -sL https://github.com/xtool-org/xtool/releases/download/1.22.2/xtool.app.zip -o xtool.app.zip
+          unzip -q xtool.app.zip
+          xattr -cr xtool.app
+          sudo cp -R xtool.app /Applications/
+          sudo ln -s /Applications/xtool.app/Contents/MacOS/xtool /usr/local/bin/xtool
+          
+          # Initialize SDK using pre-installed Xcode.app
+          XCODE_APP=$(xcode-select -p | sed 's|/Contents/Developer||')
+          echo "Using Xcode app at: $XCODE_APP"
+          /usr/local/bin/xtool sdk install "$XCODE_APP" --slim || true
 
-      - name: Package Payload into HermesEdge-unsigned.ipa
+      - name: Build Unsigned IPA via xtool
         run: |
-          find .build -name "HermesEdgeApp" -type f -ls
-          APP_BIN=$(find .build -name "HermesEdgeApp" -type f -perm +111 | grep -v '\.dSYM' | head -n 1)
-          if [ -z "$APP_BIN" ]; then
-            echo "Error: Could not locate compiled HermesEdgeApp executable"
+          /usr/local/bin/xtool dev build --configuration release --ipa
+
+      - name: Locate and Package HermesEdge-unsigned.ipa
+        run: |
+          find . -name "*.ipa" -ls
+          IPA_PATH=$(find . -name "*.ipa" -type f | head -n 1)
+          if [ -n "$IPA_PATH" ]; then
+            echo "Found IPA at: $IPA_PATH"
+            cp "$IPA_PATH" HermesEdge-unsigned.ipa
+          else
+            echo "Error: Could not locate built .ipa file"
             exit 1
           fi
-          echo "Found binary at: $APP_BIN"
-
-          mkdir -p build_stage/HermesEdge.app
-          cp "$APP_BIN" build_stage/HermesEdge.app/HermesEdgeApp
-          cp Sources/HermesEdgeApp/Info.plist build_stage/HermesEdge.app/Info.plist
-
-          mkdir -p ipa_stage/Payload
-          cp -R build_stage/HermesEdge.app ipa_stage/Payload/
-          cd ipa_stage
-          zip -qry ../HermesEdge-unsigned.ipa Payload
-          cd ..
-          ls -lh HermesEdge-unsigned.ipa
 
       - name: Upload Unsigned IPA Artifact for xtool Sideloading
         uses: actions/upload-artifact@v4
