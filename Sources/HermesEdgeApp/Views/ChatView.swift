@@ -2,16 +2,24 @@ import SwiftUI
 
 public struct ChatView: View {
     @StateObject private var modelManager = ModelManager.shared
+    @StateObject private var sessionManager = SessionManager.shared
     @StateObject private var speechManager = SpeechManager.shared
+
     @State private var messages: [MessageEnvelope] = []
     @State private var inputText: String = ""
     @State private var currentStatus: String = "Ready"
     @State private var isProcessing: Bool = false
     @State private var streamingText: String = ""
+    @State private var showTopicDrawer: Bool = false
+    @State private var showMemoryInspector: Bool = false
+    @State private var soulMarkdownText: String = ""
+    @State private var userMarkdownText: String = ""
+    @State private var agentsMarkdownText: String = ""
+
     @FocusState private var isInputFocused: Bool
 
     private let agent: AgentStateMachine
-    private let conversationId = "default-session"
+    private let memory: MemoryManager
 
     public init() {
         let tools = ToolRegistry()
@@ -27,6 +35,7 @@ public struct ChatView: View {
 
         BackgroundManager.shared.configure(engine: engine)
 
+        self.memory = memory
         self.agent = AgentStateMachine(
             toolRegistry: tools,
             persistenceStore: store,
@@ -37,190 +46,145 @@ public struct ChatView: View {
 
     public var body: some View {
         NavigationStack {
-            VStack(spacing: 0) {
-                // Model Status & Download Banner
-                if !modelManager.isModelReady {
-                    ModelDownloadCard(modelManager: modelManager)
-                        .padding(.horizontal)
-                        .padding(.top, 8)
-                }
-
-                // Status Banner
-                HStack(spacing: 6) {
-                    Circle()
-                        .fill(isProcessing ? Color.orange : Color.green)
-                        .frame(width: 8, height: 8)
-                    Text(currentStatus)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    HStack(spacing: 4) {
-                        Image(systemName: "cpu")
-                            .font(.caption2)
-                        Text(modelManager.isModelReady ? "Gemma 4 E4B • Ready" : "A17 Pro • Offline")
-                            .font(.caption2.bold())
-                    }
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
-                    .background(modelManager.isModelReady ? Color.green.opacity(0.15) : Color.blue.opacity(0.12))
-                    .foregroundStyle(modelManager.isModelReady ? Color.green : Color.blue)
-                    .cornerRadius(6)
-                }
-                .padding(.horizontal)
-                .padding(.vertical, 8)
-                .background(Color(.secondarySystemBackground))
-
-                // Chat Message Stream
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 14) {
-                            if messages.isEmpty && streamingText.isEmpty {
-                                EmptyStateView(onPromptSelected: { prompt in
-                                    inputText = prompt
-                                    sendMessage()
-                                })
-                                .padding(.top, 30)
-                            }
-
-                            ForEach(messages) { msg in
-                                MessageBubble(message: msg)
-                            }
-                            if !streamingText.isEmpty {
-                                StreamingAssistantBubble(text: streamingText)
-                            }
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 14) {
+                        // Download Card if model not yet ready
+                        if !modelManager.isModelReady {
+                            ModelDownloadCard(modelManager: modelManager)
+                                .padding(.top, 4)
                         }
-                        .padding()
-                    }
-                    .scrollDismissesKeyboard(.interactively)
-                    .onTapGesture {
-                        isInputFocused = false
-                    }
-                    .onChange(of: messages.count) {
-                        if let last = messages.last {
-                            withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
+
+                        if messages.isEmpty && streamingText.isEmpty {
+                            EmptyStateView(onPromptSelected: { prompt in
+                                inputText = prompt
+                                sendMessage()
+                            })
+                            .padding(.top, 24)
+                        }
+
+                        ForEach(messages) { msg in
+                            MessageBubble(message: msg)
+                        }
+
+                        if !streamingText.isEmpty {
+                            StreamingAssistantBubble(text: streamingText)
                         }
                     }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
                 }
-
-                Divider()
-
-                // Polished Input Bar
-                HStack(alignment: .bottom, spacing: 8) {
-                    // Voice Dictation Button
-                    Button(action: toggleVoiceInput) {
-                        ZStack {
-                            if speechManager.isRecording {
-                                Circle()
-                                    .fill(Color.red.opacity(0.2))
-                                    .frame(width: 40, height: 40)
-                                    .scaleEffect(1.2)
-                                    .animation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true), value: speechManager.isRecording)
-                            }
-                            Image(systemName: speechManager.isRecording ? "waveform.circle.fill" : "mic.circle.fill")
-                                .font(.system(size: 32))
-                                .foregroundStyle(speechManager.isRecording ? .red : .purple)
+                .scrollDismissesKeyboard(.interactively)
+                .onTapGesture {
+                    dismissKeyboard()
+                }
+                .onChange(of: messages.count) {
+                    if let last = messages.last {
+                        withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
+                    }
+                }
+            }
+            .safeAreaInset(edge: .top) {
+                TopHeaderBar(
+                    status: currentStatus,
+                    isProcessing: isProcessing,
+                    sessionTitle: sessionManager.currentSession?.title ?? "Hermes Edge",
+                    isModelReady: modelManager.isModelReady,
+                    onOpenTopics: { showTopicDrawer = true },
+                    onOpenMemory: {
+                        Task {
+                            soulMarkdownText = await memory.readSoulMarkdown()
+                            userMarkdownText = await memory.readUserMarkdown()
+                            agentsMarkdownText = await memory.readAgentsMarkdown()
+                            showMemoryInspector = true
                         }
                     }
-
-                    // Multiline Text Field
-                    TextField("Ask Hermes or give a command...", text: $inputText, axis: .vertical)
-                        .lineLimit(1...5)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(Color(.tertiarySystemBackground))
-                        .cornerRadius(18)
-                        .focused($isInputFocused)
-                        .disabled(isProcessing)
-
-                    // Send Button
-                    Button(action: sendMessage) {
-                        Image(systemName: "arrow.up.circle.fill")
-                            .font(.system(size: 32))
-                            .foregroundStyle(inputText.trimmingCharacters(in: .whitespaces).isEmpty || isProcessing ? .gray : .blue)
-                    }
-                    .disabled(inputText.trimmingCharacters(in: .whitespaces).isEmpty || isProcessing)
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
+                )
                 .background(Color(.systemBackground))
             }
-            .navigationTitle("Hermes Edge")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Menu {
-                        Button(role: .destructive, action: clearMessages) {
-                            Label("Clear Chat", systemImage: "trash")
-                        }
-                        Button(action: {
-                            modelManager.checkModelStatus()
-                        }) {
-                            Label("Check Model Weights", systemImage: "arrow.clockwise")
-                        }
-                    } label: {
-                        Image(systemName: "ellipsis.circle")
-                            .font(.subheadline)
+            .safeAreaInset(edge: .bottom) {
+                BottomInputBar(
+                    inputText: $inputText,
+                    isProcessing: isProcessing,
+                    isRecording: speechManager.isRecording,
+                    isFocused: $isInputFocused,
+                    onToggleMic: toggleVoiceInput,
+                    onSend: sendMessage
+                )
+                .background(Color(.systemBackground))
+            }
+            .navigationBarHidden(true)
+            .sheet(isPresented: $showTopicDrawer) {
+                TopicDrawerSheet(
+                    sessionManager: sessionManager,
+                    onSelect: { sessionId in
+                        loadSession(sessionId)
+                    },
+                    onNewChat: {
+                        let newSession = sessionManager.createSession()
+                        loadSession(newSession.id)
                     }
-                }
-
-                ToolbarItemGroup(placement: .keyboard) {
-                    Spacer()
-                    Button("Done") {
-                        isInputFocused = false
-                    }
-                    .font(.body.bold())
-                }
+                )
+            }
+            .sheet(isPresented: $showMemoryInspector) {
+                MemoryInspectorSheet(
+                    soulContent: soulMarkdownText,
+                    userContent: userMarkdownText,
+                    agentsContent: agentsMarkdownText
+                )
+            }
+            .onAppear {
+                loadSession(sessionManager.currentSessionId)
             }
         }
     }
 
-    private func toggleVoiceInput() {
-        if speechManager.isRecording {
-            speechManager.stopRecording()
-        } else {
-            speechManager.requestPermissions { authorized in
-                if authorized {
-                    speechManager.startRecording { transcription in
-                        self.inputText = transcription
-                    }
-                }
-            }
-        }
+    private func dismissKeyboard() {
+        isInputFocused = false
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
     }
 
-    private func clearMessages() {
-        speechManager.stopSpeaking()
-        messages.removeAll()
+    private func loadSession(_ sessionId: String) {
+        sessionManager.selectSession(id: sessionId)
+        messages = sessionManager.messages(for: sessionId)
         streamingText = ""
         currentStatus = "Ready"
     }
 
+    private func toggleVoiceInput() {
+        speechManager.toggleRecording { transcription in
+            self.inputText = transcription
+        }
+    }
+
     private func sendMessage() {
+        dismissKeyboard()
+        speechManager.stopSpeaking()
         if speechManager.isRecording {
             speechManager.stopRecording()
         }
-        speechManager.stopSpeaking()
 
         let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
 
         inputText = ""
-        isInputFocused = false
         isProcessing = true
         currentStatus = "Thinking..."
         streamingText = ""
 
+        let activeSessionId = sessionManager.currentSessionId
         let userMsg = MessageEnvelope(
-            conversationId: conversationId,
+            conversationId: activeSessionId,
             role: .user,
             content: text
         )
         messages.append(userMsg)
+        sessionManager.saveMessages(messages, for: activeSessionId)
 
         Task {
             do {
                 let reply = try await agent.processTurn(
-                    conversationId: conversationId,
+                    conversationId: activeSessionId,
                     userMessage: userMsg
                 ) { event in
                     Task { @MainActor in
@@ -230,7 +194,7 @@ public struct ChatView: View {
                         case .token(let t):
                             self.streamingText += t
                         case .toolExecuting(let name, _):
-                            self.currentStatus = "Executing \(name)..."
+                            self.currentStatus = "Running \(name)..."
                         case .toolResult(let name, _):
                             self.currentStatus = "Completed \(name)"
                         case .completed:
@@ -244,6 +208,7 @@ public struct ChatView: View {
                 await MainActor.run {
                     self.streamingText = ""
                     self.messages.append(reply)
+                    self.sessionManager.saveMessages(self.messages, for: activeSessionId)
                     self.isProcessing = false
                     self.currentStatus = "Ready"
                 }
@@ -258,57 +223,263 @@ public struct ChatView: View {
     }
 }
 
-// MARK: - Supporting Views
+// MARK: - Header Bar (Aligned for iPhone 15 Pro Dynamic Island)
 
-struct EmptyStateView: View {
-    let onPromptSelected: (String) -> Void
-
-    let suggestions = [
-        "Plan my day for high focus",
-        "Remind me to check Hermes tomorrow at 9 AM",
-        "Open WhatsApp with my latest update",
-        "What are my active reminders?"
-    ]
+struct TopHeaderBar: View {
+    let status: String
+    let isProcessing: Bool
+    let sessionTitle: String
+    let isModelReady: Bool
+    let onOpenTopics: () -> Void
+    let onOpenMemory: () -> Void
 
     var body: some View {
-        VStack(spacing: 16) {
-            Image(systemName: "sparkles")
-                .font(.system(size: 44))
-                .foregroundStyle(.blue)
+        VStack(spacing: 6) {
+            HStack(spacing: 12) {
+                // Topic Selector Button
+                Button(action: onOpenTopics) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "line.3.horizontal")
+                            .font(.headline)
+                        Text(sessionTitle)
+                            .font(.subheadline.bold())
+                            .lineLimit(1)
+                        Image(systemName: "chevron.down")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    .foregroundStyle(.primary)
+                }
 
-            Text("Hermes Edge")
-                .font(.title2.bold())
+                Spacer()
 
-            Text("100% offline on-device personal assistant powered by Gemma 4 E4B & Apple A17 Pro Metal acceleration.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 32)
+                // Memory / SOUL Inspector Button
+                Button(action: onOpenMemory) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "brain.head.profile")
+                            .font(.caption)
+                        Text("Memory")
+                            .font(.caption.bold())
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color(.secondarySystemBackground))
+                    .cornerRadius(8)
+                    .foregroundStyle(.primary)
+                }
 
-            VStack(spacing: 8) {
-                ForEach(suggestions, id: \.self) { suggestion in
-                    Button(action: { onPromptSelected(suggestion) }) {
-                        HStack {
-                            Text(suggestion)
-                                .font(.caption.bold())
-                                .foregroundStyle(.primary)
-                            Spacer()
-                            Image(systemName: "arrow.up.right")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
+                // Model Status Chip
+                HStack(spacing: 4) {
+                    Circle()
+                        .fill(isProcessing ? Color.orange : (isModelReady ? Color.green : Color.blue))
+                        .frame(width: 7, height: 7)
+                    Text(isModelReady ? "Gemma 4B" : "Setup")
+                        .font(.caption2.bold())
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(Color(.secondarySystemBackground))
+                .cornerRadius(8)
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 8)
+            .padding(.bottom, 6)
+
+            Divider()
+        }
+        .background(Color(.systemBackground))
+    }
+}
+
+// MARK: - Docked Input Bar
+
+struct BottomInputBar: View {
+    @Binding var inputText: String
+    let isProcessing: Bool
+    let isRecording: Bool
+    var isFocused: FocusState<Bool>.Binding
+    let onToggleMic: () -> Void
+    let onSend: () -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Divider()
+
+            HStack(alignment: .bottom, spacing: 8) {
+                // Voice Dictation Button
+                Button(action: onToggleMic) {
+                    ZStack {
+                        if isRecording {
+                            Circle()
+                                .fill(Color.red.opacity(0.2))
+                                .frame(width: 36, height: 36)
+                                .scaleEffect(1.2)
+                                .animation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true), value: isRecording)
                         }
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 10)
-                        .background(Color(.secondarySystemBackground))
-                        .cornerRadius(10)
+                        Image(systemName: isRecording ? "waveform.circle.fill" : "mic.circle.fill")
+                            .font(.system(size: 30))
+                            .foregroundStyle(isRecording ? .red : .purple)
                     }
                 }
+                .padding(.bottom, 2)
+
+                // Multiline Auto-Growing Text Field
+                TextField("Ask Hermes or give a command...", text: $inputText, axis: .vertical)
+                    .lineLimit(1...5)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(Color(.secondarySystemBackground))
+                    .cornerRadius(18)
+                    .focused(isFocused)
+                    .disabled(isProcessing)
+
+                // Send Button
+                Button(action: onSend) {
+                    Image(systemName: "arrow.up.circle.fill")
+                        .font(.system(size: 30))
+                        .foregroundStyle(inputText.trimmingCharacters(in: .whitespaces).isEmpty || isProcessing ? Color(.systemGray4) : Color.blue)
+                }
+                .disabled(inputText.trimmingCharacters(in: .whitespaces).isEmpty || isProcessing)
+                .padding(.bottom, 2)
             }
-            .padding(.horizontal, 24)
-            .padding(.top, 8)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(Color(.systemBackground))
         }
     }
 }
+
+// MARK: - Topic Drawer Sheet
+
+struct TopicDrawerSheet: View {
+    @ObservedObject var sessionManager: SessionManager
+    @Environment(\.dismiss) private var dismiss
+    let onSelect: (String) -> Void
+    let onNewChat: () -> Void
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    Button(action: {
+                        dismiss()
+                        onNewChat()
+                    }) {
+                        HStack {
+                            Image(systemName: "plus.circle.fill")
+                                .foregroundStyle(.blue)
+                            Text("New Conversation")
+                                .font(.body.bold())
+                        }
+                    }
+                }
+
+                Section("Conversations") {
+                    ForEach(sessionManager.sessions) { session in
+                        Button(action: {
+                            dismiss()
+                            onSelect(session.id)
+                        }) {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(session.title)
+                                        .font(.body)
+                                        .foregroundStyle(.primary)
+                                    Text(session.updatedAt, style: .date)
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                if session.id == sessionManager.currentSessionId {
+                                    Image(systemName: "checkmark")
+                                        .foregroundStyle(.blue)
+                                }
+                            }
+                        }
+                        .swipeActions(edge: .trailing) {
+                            Button(role: .destructive) {
+                                sessionManager.deleteSession(id: session.id)
+                            } label: {
+                                Label("Delete", systemImage: "trash")
+                            }
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Topics & Chats")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Memory Inspector Sheet (SOUL.md / USER.md / AGENTS.md)
+
+struct MemoryInspectorSheet: View {
+    let soulContent: String
+    let userContent: String
+    let agentsContent: String
+    @Environment(\.dismiss) private var dismiss
+    @State private var selectedTab: Int = 0
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 12) {
+                Picker("Memory Scope", selection: $selectedTab) {
+                    Text("USER.md").tag(0)
+                    Text("SOUL.md").tag(1)
+                    Text("AGENTS.md").tag(2)
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal)
+                .padding(.top, 8)
+
+                ScrollView {
+                    Text(currentContent)
+                        .font(.system(.caption, design: .monospaced))
+                        .padding()
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color(.secondarySystemBackground))
+                        .cornerRadius(12)
+                        .padding(.horizontal)
+                }
+
+                // Files App Note
+                HStack(spacing: 6) {
+                    Image(systemName: "folder.fill")
+                        .font(.caption2)
+                        .foregroundStyle(.blue)
+                    Text("Files -> On My iPhone -> HermesEdge")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.bottom, 8)
+            }
+            .navigationTitle("Durable Memory & Persona")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+    }
+
+    private var currentContent: String {
+        switch selectedTab {
+        case 0: return userContent
+        case 1: return soulContent
+        case 2: return agentsContent
+        default: return userContent
+        }
+    }
+}
+
+// MARK: - Message Bubble & Tools
 
 struct MessageBubble: View {
     let message: MessageEnvelope
@@ -317,9 +488,9 @@ struct MessageBubble: View {
         HStack(alignment: .top, spacing: 8) {
             if message.role == .assistant {
                 Image(systemName: "sparkles")
-                    .font(.caption)
+                    .font(.caption2)
                     .foregroundStyle(.white)
-                    .frame(width: 26, height: 26)
+                    .frame(width: 24, height: 24)
                     .background(Color.blue)
                     .clipShape(Circle())
             } else {
@@ -342,7 +513,6 @@ struct MessageBubble: View {
                         .cornerRadius(16)
                 }
 
-                // Assistant Voice Playback Button
                 if message.role == .assistant && !message.content.isEmpty {
                     Button(action: {
                         SpeechManager.shared.speak(text: message.content)
@@ -360,9 +530,9 @@ struct MessageBubble: View {
 
             if message.role == .user {
                 Image(systemName: "person.fill")
-                    .font(.caption)
+                    .font(.caption2)
                     .foregroundStyle(.white)
-                    .frame(width: 26, height: 26)
+                    .frame(width: 24, height: 24)
                     .background(Color.gray)
                     .clipShape(Circle())
             }
@@ -376,9 +546,9 @@ struct StreamingAssistantBubble: View {
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
             Image(systemName: "sparkles")
-                .font(.caption)
+                .font(.caption2)
                 .foregroundStyle(.white)
-                .frame(width: 26, height: 26)
+                .frame(width: 24, height: 24)
                 .background(Color.blue)
                 .clipShape(Circle())
 
@@ -441,6 +611,56 @@ struct ToolExecutionCard: View {
     }
 }
 
+struct EmptyStateView: View {
+    let onPromptSelected: (String) -> Void
+
+    let suggestions = [
+        "Plan my day for high focus",
+        "Remind me to check Hermes tomorrow at 9 AM",
+        "Open WhatsApp with my latest update",
+        "What are my active reminders?"
+    ]
+
+    var body: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "sparkles")
+                .font(.system(size: 40))
+                .foregroundStyle(.blue)
+
+            Text("Hermes Edge")
+                .font(.title3.bold())
+
+            Text("100% offline personal assistant powered by Gemma 4 E4B & Apple A17 Pro Metal acceleration.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 32)
+
+            VStack(spacing: 8) {
+                ForEach(suggestions, id: \.self) { suggestion in
+                    Button(action: { onPromptSelected(suggestion) }) {
+                        HStack {
+                            Text(suggestion)
+                                .font(.caption.bold())
+                                .foregroundStyle(.primary)
+                            Spacer()
+                            Image(systemName: "arrow.up.right")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 9)
+                        .background(Color(.secondarySystemBackground))
+                        .cornerRadius(10)
+                    }
+                }
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 6)
+        }
+    }
+}
+
 struct ModelDownloadCard: View {
     @ObservedObject var modelManager: ModelManager
 
@@ -469,32 +689,17 @@ struct ModelDownloadCard: View {
                     .foregroundStyle(.red)
                 }
             } else {
-                Text("Download the quantized edge model once to run 100% offline with Apple Silicon Metal acceleration.")
+                Text("Model weights detected on device. Apple Silicon Metal INT4 active.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
                 HStack(spacing: 8) {
                     Button(action: {
-                        modelManager.startDownload()
-                    }) {
-                        HStack {
-                            Image(systemName: "icloud.and.arrow.down")
-                            Text("Download Model")
-                        }
-                        .font(.caption.bold())
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background(Color.blue)
-                        .foregroundStyle(.white)
-                        .cornerRadius(8)
-                    }
-
-                    Button(action: {
                         modelManager.checkModelStatus()
                     }) {
                         HStack {
                             Image(systemName: "arrow.clockwise")
-                            Text("Check Files")
+                            Text("Refresh Status")
                         }
                         .font(.caption.bold())
                         .padding(.horizontal, 10)
@@ -504,12 +709,6 @@ struct ModelDownloadCard: View {
                         .cornerRadius(8)
                     }
                 }
-            }
-
-            if let err = modelManager.errorMessage {
-                Text(err)
-                    .font(.caption2)
-                    .foregroundStyle(.red)
             }
         }
         .padding(12)

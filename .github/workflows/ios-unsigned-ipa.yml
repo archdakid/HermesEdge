@@ -11,6 +11,7 @@ on:
       - 'Package.swift'
       - 'project.yml'
       - 'xtool.yml'
+      - 'Info.plist'
       - '.github/workflows/ios-unsigned-ipa.yml'
 
 jobs:
