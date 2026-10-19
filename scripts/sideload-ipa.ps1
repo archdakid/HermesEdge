@@ -29,12 +29,12 @@ if (-not (Test-Path $IpaPath)) {
         $headers = @{
             Authorization = "Bearer $ghToken"
             Accept        = "application/vnd.github+json"
-            "User-Agent"  = "Helpful-xtool-Sideloader"
+            "User-Agent"  = "HermesEdge-xtool-Sideloader"
         }
-        $artifactsResp = Invoke-RestMethod -Uri "https://api.github.com/repos/archdakid/thehelpfulgrocer/actions/artifacts?name=SmartShopper-unsigned-ipa&per_page=1" -Headers $headers
+        $artifactsResp = Invoke-RestMethod -Uri "https://api.github.com/repos/archdakid/HermesEdge/actions/artifacts?name=HermesEdge-unsigned-ipa&per_page=1" -Headers $headers
         if ($artifactsResp.artifacts -and $artifactsResp.artifacts.Count -gt 0) {
             $artifact = $artifactsResp.artifacts[0]
-            $zipPath = Join-Path $env:TEMP "SmartShopper-unsigned-ipa.zip"
+            $zipPath = Join-Path $env:TEMP "HermesEdge-unsigned-ipa.zip"
             Write-Host "Downloading artifact #$($artifact.id) (created $($artifact.created_at))..." -ForegroundColor Cyan
             Invoke-WebRequest -Uri $artifact.archive_download_url -Headers $headers -OutFile $zipPath
             Expand-Archive -Path $zipPath -DestinationPath "." -Force
