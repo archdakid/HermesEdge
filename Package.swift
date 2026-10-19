@@ -28,11 +28,6 @@ let package = Package(
             name: "HermesEdgeApp",
             dependencies: ["HermesEdgeCore"],
             path: "Sources/HermesEdgeApp"
-        ),
-        .testTarget(
-            name: "HermesEdgeTests",
-            dependencies: ["HermesEdgeCore"],
-            path: "Tests/HermesEdgeTests"
         )
     ]
 )

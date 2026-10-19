@@ -12,12 +12,12 @@ targets:
       - path: Sources/HermesEdgeApp
       - path: Sources/HermesEdgeCore
     info:
-      path: Sources/HermesEdgeApp/Info.plist
+      path: Info.plist
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.quincearch.HermesEdge
         GENERATE_INFOPLIST_FILE: NO
-        INFOPLIST_FILE: Sources/HermesEdgeApp/Info.plist
+        INFOPLIST_FILE: Info.plist
         CODE_SIGNING_ALLOWED: NO
         CODE_SIGNING_REQUIRED: NO
         CODE_SIGN_IDENTITY: ""

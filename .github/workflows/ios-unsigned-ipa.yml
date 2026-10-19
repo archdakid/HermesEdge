@@ -48,7 +48,7 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             AD_HOC_CODE_SIGNING_ALLOWED=YES \
-            COMPILER_INDEX_STORE_ENABLE=NO
+            COMPILER_INDEX_STORE_ENABLE=NO 2>&1 | tee xcodebuild.log || (echo "=== XCODEBUILD ERROR ===" && tail -n 60 xcodebuild.log && exit 1)
 
       - name: Package Payload into HermesEdge-unsigned.ipa
         run: |
