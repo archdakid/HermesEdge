@@ -22,16 +22,20 @@
     <true/>
     <key>MinimumOSVersion</key>
     <string>18.0</string>
-    <key>UILaunchScreen</key>
-    <dict/>
+    <key>UILaunchStoryboardName</key>
+    <string>LaunchScreen</string>
     <key>UISupportedInterfaceOrientations</key>
     <array>
         <string>UIInterfaceOrientationPortrait</string>
     </array>
     <key>NSRemindersUsageDescription</key>
     <string>Hermes needs access to Reminders to create and manage reminders on your behalf.</string>
+    <key>NSRemindersFullAccessUsageDescription</key>
+    <string>Hermes needs full access to Reminders to create, organize, and check your tasks offline.</string>
     <key>NSCalendarsUsageDescription</key>
     <string>Hermes needs access to Calendar to check and schedule your appointments.</string>
+    <key>NSCalendarsFullAccessUsageDescription</key>
+    <string>Hermes needs full access to Calendar to check, plan, and schedule your appointments offline.</string>
     <key>NSSpeechRecognitionUsageDescription</key>
     <string>Hermes uses speech recognition to transcribe your voice commands completely offline on your iPhone.</string>
     <key>NSMicrophoneUsageDescription</key>

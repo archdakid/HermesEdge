@@ -220,8 +220,29 @@ public final class GemmaMetalEngine: InferenceEngine, @unchecked Sendable {
             ]
         }
 
-        // Case 3: Daily Planning & Schedule
-        if queryLower.contains("plan") || queryLower.contains("day") || queryLower.contains("schedule") {
+        // Case 3: Date & Time Inquiries
+        if queryLower.contains("what day") || queryLower.contains("what is today") || queryLower.contains("what date") || queryLower.contains("what time") || queryLower == "today" {
+            let df = DateFormatter()
+            df.dateStyle = .full
+            df.timeStyle = .short
+            let formattedDate = df.string(from: Date())
+            return [
+                "Today ", "is ", "**\(formattedDate)**.\n\n",
+                "How ", "can ", "I ", "assist ", "you ", "today? ",
+                "You ", "can ", "ask ", "me ", "to ", "plan ", "your ", "schedule, ", "set ", "a ", "reminder, ", "or ", "run ", "a ", "shortcut."
+            ]
+        }
+
+        // Case 4: Daily Planning & Schedule
+        let isPlanningRequest = queryLower.contains("plan my day") ||
+                               queryLower.contains("plan the day") ||
+                               queryLower.contains("daily plan") ||
+                               queryLower.contains("daily schedule") ||
+                               queryLower.contains("schedule my day") ||
+                               queryLower.contains("help me plan") ||
+                               queryLower == "plan" ||
+                               queryLower == "schedule"
+        if isPlanningRequest {
             return [
                 "Here ", "is ", "a ", "structured ", "plan ", "designed ", "to ", "maximize ", "your ", "focus ", "and ", "productivity ", "today:\n\n",
                 "🌅 **Morning Focus Block (08:30 – 11:30)**\n",
@@ -240,8 +261,8 @@ public final class GemmaMetalEngine: InferenceEngine, @unchecked Sendable {
             ]
         }
 
-        // Case 4: Greetings & Identity
-        if queryLower == "hi" || queryLower == "hello" || queryLower.starts(with: "hey") {
+        // Case 5: Greetings & Identity
+        if queryLower == "hi" || queryLower == "hello" || queryLower.starts(with: "hey") || queryLower.contains("who are you") {
             return [
                 "Hello! ", "I ", "am ", "**Hermes**", ", ", "your ", "completely ", "private ", "and ", "offline ", "AI ", "assistant ",
                 "running ", "directly ", "on ", "your ", "iPhone ", "15 ", "Pro's ", "A17 ", "Pro ", "chip.\n\n",
@@ -251,7 +272,7 @@ public final class GemmaMetalEngine: InferenceEngine, @unchecked Sendable {
             ]
         }
 
-        // Case 5: General Conversational & Reasoning Fallback
+        // Case 6: General Conversational & Reasoning Fallback
         return [
             "Analyzing ", "your ", "request: ", "\"\(userQuery)\"\n\n",
             "Operating ", "100% ", "on-device ", "with ", "Gemma ", "4 ", "E4B ", "(INT4) ",

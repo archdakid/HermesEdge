@@ -12,6 +12,7 @@ public struct ChatView: View {
     @State private var streamingText: String = ""
     @State private var showTopicDrawer: Bool = false
     @State private var showMemoryInspector: Bool = false
+    @State private var showLogsSheet: Bool = false
     @State private var soulMarkdownText: String = ""
     @State private var userMarkdownText: String = ""
     @State private var agentsMarkdownText: String = ""
@@ -98,7 +99,8 @@ public struct ChatView: View {
                             agentsMarkdownText = await memory.readAgentsMarkdown()
                             showMemoryInspector = true
                         }
-                    }
+                    },
+                    onOpenLogs: { showLogsSheet = true }
                 )
                 .background(Color(.systemBackground))
             }
@@ -132,6 +134,9 @@ public struct ChatView: View {
                     userContent: userMarkdownText,
                     agentsContent: agentsMarkdownText
                 )
+            }
+            .sheet(isPresented: $showLogsSheet) {
+                LogsSheet()
             }
             .onAppear {
                 loadSession(sessionManager.currentSessionId)
@@ -232,15 +237,16 @@ struct TopHeaderBar: View {
     let isModelReady: Bool
     let onOpenTopics: () -> Void
     let onOpenMemory: () -> Void
+    let onOpenLogs: () -> Void
 
     var body: some View {
         VStack(spacing: 6) {
-            HStack(spacing: 12) {
+            HStack(spacing: 8) {
                 // Topic Selector Button
                 Button(action: onOpenTopics) {
-                    HStack(spacing: 6) {
+                    HStack(spacing: 4) {
                         Image(systemName: "line.3.horizontal")
-                            .font(.headline)
+                            .font(.subheadline)
                         Text(sessionTitle)
                             .font(.subheadline.bold())
                             .lineLimit(1)
@@ -253,15 +259,30 @@ struct TopHeaderBar: View {
 
                 Spacer()
 
+                // Live Logs & Diagnostics Button
+                Button(action: onOpenLogs) {
+                    HStack(spacing: 3) {
+                        Image(systemName: "terminal.fill")
+                            .font(.caption2)
+                        Text("Logs")
+                            .font(.caption2.bold())
+                    }
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 4)
+                    .background(Color(.secondarySystemBackground))
+                    .cornerRadius(8)
+                    .foregroundStyle(.purple)
+                }
+
                 // Memory / SOUL Inspector Button
                 Button(action: onOpenMemory) {
-                    HStack(spacing: 4) {
+                    HStack(spacing: 3) {
                         Image(systemName: "brain.head.profile")
-                            .font(.caption)
+                            .font(.caption2)
                         Text("Memory")
-                            .font(.caption.bold())
+                            .font(.caption2.bold())
                     }
-                    .padding(.horizontal, 8)
+                    .padding(.horizontal, 7)
                     .padding(.vertical, 4)
                     .background(Color(.secondarySystemBackground))
                     .cornerRadius(8)
@@ -273,10 +294,10 @@ struct TopHeaderBar: View {
                     Circle()
                         .fill(isProcessing ? Color.orange : (isModelReady ? Color.green : Color.blue))
                         .frame(width: 7, height: 7)
-                    Text(isModelReady ? "Gemma 4B" : "Setup")
+                    Text(isModelReady ? "Gemma 4B" : "Ready")
                         .font(.caption2.bold())
                 }
-                .padding(.horizontal, 8)
+                .padding(.horizontal, 7)
                 .padding(.vertical, 4)
                 .background(Color(.secondarySystemBackground))
                 .cornerRadius(8)
@@ -476,6 +497,133 @@ struct MemoryInspectorSheet: View {
         case 2: return agentsContent
         default: return userContent
         }
+    }
+}
+
+// MARK: - In-App Live Diagnostics & Logs Sheet
+
+struct LogsSheet: View {
+    @ObservedObject var logger = AppLogger.shared
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 8) {
+                // Previous Crash Banner (if any)
+                if let crash = logger.readCrashFile() {
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.red)
+                            Text("LAST UNCAUGHT CRASH")
+                                .font(.caption.bold())
+                                .foregroundStyle(.red)
+                            Spacer()
+                            Button("Dismiss Crash") {
+                                logger.clearCrashFile()
+                            }
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        }
+                        ScrollView {
+                            Text(crash)
+                                .font(.system(size: 10, design: .monospaced))
+                                .foregroundStyle(.red)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .frame(maxHeight: 120)
+                    }
+                    .padding(8)
+                    .background(Color.red.opacity(0.12))
+                    .cornerRadius(8)
+                    .padding(.horizontal)
+                }
+
+                // Live Console Logs
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 3) {
+                            ForEach(Array(logger.recentLogs.enumerated()), id: \.offset) { idx, log in
+                                Text(log)
+                                    .font(.system(size: 10, design: .monospaced))
+                                    .foregroundStyle(logColor(for: log))
+                                    .id(idx)
+                            }
+                        }
+                        .padding(8)
+                    }
+                    .background(Color(.secondarySystemBackground))
+                    .cornerRadius(10)
+                    .padding(.horizontal)
+                    .onChange(of: logger.recentLogs.count) {
+                        if !logger.recentLogs.isEmpty {
+                            withAnimation {
+                                proxy.scrollTo(logger.recentLogs.count - 1, anchor: .bottom)
+                            }
+                        }
+                    }
+                }
+
+                // Action Bar
+                HStack(spacing: 12) {
+                    Button(role: .destructive, action: {
+                        logger.clearLogs()
+                        logger.clearCrashFile()
+                    }) {
+                        Label("Clear Logs", systemImage: "trash")
+                            .font(.caption)
+                    }
+
+                    Spacer()
+
+                    // Quick Test Permission Buttons
+                    Button("Test Reminder") {
+                        Task {
+                            let tool = EventKitTool()
+                            let res = try? await tool.execute(argumentsJson: "{\"action\": \"list_reminders\"}")
+                            AppLogger.shared.log("Direct reminder test result: \(res ?? "nil")", tag: "TEST")
+                        }
+                    }
+                    .font(.caption2.bold())
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color(.tertiarySystemBackground))
+                    .cornerRadius(6)
+
+                    Button("Copy All") {
+                        UIPasteboard.general.string = logger.readLogFile()
+                    }
+                    .font(.caption.bold())
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .background(Color.blue)
+                    .foregroundStyle(.white)
+                    .cornerRadius(6)
+                }
+                .padding(.horizontal)
+                .padding(.bottom, 8)
+            }
+            .navigationTitle("Live Diagnostics & Logs")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+    }
+
+    private func logColor(for log: String) -> Color {
+        if log.contains("CRASH") || log.contains("Error") || log.contains("failed") {
+            return .red
+        } else if log.contains("SPEECH") {
+            return .purple
+        } else if log.contains("EVENTKIT") {
+            return .orange
+        } else if log.contains("TEST") {
+            return .blue
+        }
+        return .primary
     }
 }
 

@@ -17,13 +17,14 @@ public final class SpeechManager: NSObject, ObservableObject, SFSpeechRecognizer
     private let speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
-    private let audioEngine = AVAudioEngine()
+    private var audioEngine: AVAudioEngine?
     private let speechSynthesizer = AVSpeechSynthesizer()
 
     public override init() {
         super.init()
         speechRecognizer?.delegate = self
         checkAuthorization()
+        AppLogger.shared.log("SpeechManager initialized (Authorized: \(isAuthorized)).", tag: "SPEECH")
     }
 
     public func checkAuthorization() {
@@ -32,12 +33,28 @@ public final class SpeechManager: NSObject, ObservableObject, SFSpeechRecognizer
         isAuthorized = (speechStatus == .authorized && micStatus == .granted)
     }
 
+    /// Requests Speech Recognition and Microphone permissions sequentially on MainActor.
     public func requestPermissions(completion: @escaping (Bool) -> Void) {
-        SFSpeechRecognizer.requestAuthorization { status in
-            AVAudioSession.sharedInstance().requestRecordPermission { micGranted in
-                Task { @MainActor in
-                    self.isAuthorized = (status == .authorized && micGranted)
-                    completion(self.isAuthorized)
+        AppLogger.shared.log("Requesting Speech Recognition permission...", tag: "SPEECH")
+        SFSpeechRecognizer.requestAuthorization { [weak self] speechStatus in
+            Task { @MainActor in
+                AppLogger.shared.log("Speech Recognition status: \(speechStatus.rawValue)", tag: "SPEECH")
+                if speechStatus != .authorized {
+                    self?.errorMessage = "Speech Recognition permission was not granted."
+                    completion(false)
+                    return
+                }
+
+                AppLogger.shared.log("Requesting Microphone permission...", tag: "SPEECH")
+                AVAudioSession.sharedInstance().requestRecordPermission { micGranted in
+                    Task { @MainActor in
+                        AppLogger.shared.log("Microphone granted: \(micGranted)", tag: "SPEECH")
+                        self?.isAuthorized = micGranted
+                        if !micGranted {
+                            self?.errorMessage = "Microphone permission was not granted."
+                        }
+                        completion(micGranted)
+                    }
                 }
             }
         }
@@ -46,29 +63,35 @@ public final class SpeechManager: NSObject, ObservableObject, SFSpeechRecognizer
     /// Toggles voice recording on or off safely.
     public func toggleRecording(onUpdate: @escaping (String) -> Void) {
         if isRecording {
+            AppLogger.shared.log("User tapped mic to STOP recording.", tag: "SPEECH")
             stopRecording()
-        } else {
-            let micPermission = AVAudioSession.sharedInstance().recordPermission
-            let speechStatus = SFSpeechRecognizer.authorizationStatus()
-
-            if micPermission != .granted || speechStatus != .authorized {
-                requestPermissions { authorized in
-                    if authorized {
-                        self.startRecordingSafely(onUpdate: onUpdate)
-                    } else {
-                        self.errorMessage = "Please enable Microphone and Speech Recognition in Settings -> HermesEdge."
-                    }
-                }
-            } else {
-                startRecordingSafely(onUpdate: onUpdate)
-            }
+            return
         }
+
+        AppLogger.shared.log("User tapped mic to START recording.", tag: "SPEECH")
+        let micPermission = AVAudioSession.sharedInstance().recordPermission
+        let speechStatus = SFSpeechRecognizer.authorizationStatus()
+
+        if micPermission != .granted || speechStatus != .authorized {
+            AppLogger.shared.log("Permissions missing (Mic: \(micPermission.rawValue), Speech: \(speechStatus.rawValue)). Requesting...", tag: "SPEECH")
+            requestPermissions { [weak self] granted in
+                if granted {
+                    self?.errorMessage = "Permissions granted! Tap the mic again to speak."
+                } else {
+                    self?.errorMessage = "Microphone & Speech permissions required. Enable in iOS Settings -> HermesEdge."
+                }
+            }
+            return
+        }
+
+        startRecordingSafely(onUpdate: onUpdate)
     }
 
-    /// Starts streaming speech recognition with defensive hardware guards against SIGABRT / CoreAudio crashes.
+    /// Starts streaming speech recognition with defensive guards against audio crashes.
     private func startRecordingSafely(onUpdate: @escaping (String) -> Void) {
         guard let speechRecognizer = speechRecognizer, speechRecognizer.isAvailable else {
-            errorMessage = "On-device speech recognition is currently unavailable."
+            errorMessage = "On-device speech recognition is not available."
+            AppLogger.shared.log("Speech recognizer unavailable.", tag: "SPEECH")
             return
         }
 
@@ -77,48 +100,62 @@ public final class SpeechManager: NSObject, ObservableObject, SFSpeechRecognizer
         liveTranscription = ""
         errorMessage = nil
 
+        AppLogger.shared.log("Configuring audio session for voice recording...", tag: "SPEECH")
         let audioSession = AVAudioSession.sharedInstance()
         do {
             try audioSession.setCategory(.playAndRecord, mode: .measurement, options: [.duckOthers, .defaultToSpeaker])
             try audioSession.setActive(true, options: .notifyOthersOnDeactivation)
         } catch {
-            errorMessage = "Audio session failed: \(error.localizedDescription)"
+            let msg = "Audio session configuration failed: \(error.localizedDescription)"
+            errorMessage = msg
+            AppLogger.shared.log(msg, tag: "SPEECH")
             return
         }
 
         recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
-        guard let recognitionRequest = recognitionRequest else { return }
-
-        // Enable on-device offline recognition when supported
-        if speechRecognizer.supportsOnDeviceRecognition {
-            recognitionRequest.requiresOnDeviceRecognition = true
-        }
-        recognitionRequest.shouldReportPartialResults = true
-
-        // Defensive guard: Check hardware audio format before installing tap
-        let inputNode = audioEngine.inputNode
-        let recordingFormat = inputNode.inputFormat(forBus: 0)
-
-        guard recordingFormat.sampleRate > 0 && recordingFormat.channelCount > 0 else {
-            errorMessage = "Audio hardware initializing. Please tap again."
+        guard let recognitionRequest = recognitionRequest else {
+            errorMessage = "Could not initialize speech recognition request."
             return
         }
 
+        if speechRecognizer.supportsOnDeviceRecognition {
+            recognitionRequest.requiresOnDeviceRecognition = true
+            AppLogger.shared.log("On-device offline speech recognition enabled.", tag: "SPEECH")
+        }
+        recognitionRequest.shouldReportPartialResults = true
+
+        // Create fresh AVAudioEngine instance to avoid contaminated graph state
+        let engine = AVAudioEngine()
+        self.audioEngine = engine
+
+        let inputNode = engine.inputNode
+        let recordingFormat = inputNode.outputFormat(forBus: 0)
+        AppLogger.shared.log("Audio inputNode sampleRate=\(recordingFormat.sampleRate), channels=\(recordingFormat.channelCount)", tag: "SPEECH")
+
+        guard recordingFormat.sampleRate > 0 && recordingFormat.channelCount > 0 else {
+            errorMessage = "Audio hardware sample rate is 0. Please tap mic again."
+            AppLogger.shared.log("Aborted: sampleRate=0", tag: "SPEECH")
+            return
+        }
+
+        // Use format: nil to tap native output format safely
         inputNode.removeTap(onBus: 0)
         inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [weak self] buffer, _ in
             self?.recognitionRequest?.append(buffer)
         }
 
-        audioEngine.prepare()
+        engine.prepare()
         do {
-            try audioEngine.start()
+            try engine.start()
+            isRecording = true
+            AppLogger.shared.log("AVAudioEngine started successfully. Listening...", tag: "SPEECH")
         } catch {
             inputNode.removeTap(onBus: 0)
-            errorMessage = "Audio engine failed to start: \(error.localizedDescription)"
+            let msg = "Audio engine failed to start: \(error.localizedDescription)"
+            errorMessage = msg
+            AppLogger.shared.log(msg, tag: "SPEECH")
             return
         }
-
-        isRecording = true
 
         recognitionTask = speechRecognizer.recognitionTask(with: recognitionRequest) { [weak self] result, error in
             guard let self = self else { return }
@@ -131,25 +168,35 @@ public final class SpeechManager: NSObject, ObservableObject, SFSpeechRecognizer
                 }
             }
 
-            if error != nil || (result?.isFinal ?? false) {
+            if let error = error {
                 Task { @MainActor in
+                    AppLogger.shared.log("Recognition task ended with error: \(error.localizedDescription)", tag: "SPEECH")
+                    self.stopRecording()
+                }
+            } else if result?.isFinal ?? false {
+                Task { @MainActor in
+                    AppLogger.shared.log("Recognition task completed final result.", tag: "SPEECH")
                     self.stopRecording()
                 }
             }
         }
     }
 
-    /// Safely halts recording and clears audio taps.
+    /// Safely halts recording and deallocates audio engine.
     public func stopRecording() {
-        if audioEngine.isRunning {
-            audioEngine.stop()
+        if let engine = audioEngine {
+            if engine.isRunning {
+                engine.stop()
+            }
+            engine.inputNode.removeTap(onBus: 0)
         }
-        audioEngine.inputNode.removeTap(onBus: 0)
+        audioEngine = nil
         recognitionRequest?.endAudio()
         recognitionTask?.cancel()
         recognitionRequest = nil
         recognitionTask = nil
         isRecording = false
+        AppLogger.shared.log("Recording stopped and audio engine cleared.", tag: "SPEECH")
     }
 
     /// Reads text aloud using iOS's neural text-to-speech voice completely offline.
@@ -163,6 +210,7 @@ public final class SpeechManager: NSObject, ObservableObject, SFSpeechRecognizer
 
         isSpeaking = true
         speechSynthesizer.speak(utterance)
+        AppLogger.shared.log("Speaking: \"\(text.prefix(40))...\"", tag: "SPEECH")
     }
 
     public func stopSpeaking() {

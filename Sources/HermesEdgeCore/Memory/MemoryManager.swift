@@ -30,6 +30,25 @@ public actor MemoryManager {
 
     /// Bootstraps durable SOUL.md, USER.md, and AGENTS.md in iOS Documents so they can be inspected in the Files app.
     public func bootstrapMemoryFiles() {
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+        try? FileManager.default.createDirectory(at: docs, withIntermediateDirectories: true)
+
+        // 0. Ensure README.txt exists so iOS Files app immediately registers the folder
+        let readmeURL = docs.appendingPathComponent("README.txt")
+        if !FileManager.default.fileExists(atPath: readmeURL.path) {
+            let readme = """
+            HermesEdge On-Device Assistant
+            -------------------------------
+            This folder stores your private, on-device assistant data:
+            - USER.md: User facts and preferences
+            - SOUL.md: Assistant persona & tool calling contract
+            - AGENTS.md: Subagent specialization roles
+            - debug.log: Real-time diagnostics
+            - chat_sessions.json: Topic conversation threads
+            """
+            try? readme.write(to: readmeURL, atomically: true, encoding: .utf8)
+        }
+
         // 1. Ensure USER.md exists
         if !FileManager.default.fileExists(atPath: userMarkdownURL.path) {
             let defaultUser = """

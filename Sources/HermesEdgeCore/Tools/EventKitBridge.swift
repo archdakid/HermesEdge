@@ -62,10 +62,15 @@ public final class EventKitTool: ToolContract, @unchecked Sendable {
     }
 
     private func createReminder(title: String, notes: String?) async throws -> String {
-        // Request authorization if needed
+        AppLogger.shared.log("Requesting full access to Reminders...", tag: "EVENTKIT")
         let granted: Bool
         if #available(iOS 17.0, *) {
-            granted = try await eventStore.requestFullAccessToReminders()
+            do {
+                granted = try await eventStore.requestFullAccessToReminders()
+            } catch {
+                AppLogger.shared.log("Reminders access error: \(error.localizedDescription)", tag: "EVENTKIT")
+                return "Error requesting reminders permission: \(error.localizedDescription)"
+            }
         } else {
             granted = try await withCheckedThrowingContinuation { cont in
                 eventStore.requestAccess(to: .reminder) { ok, err in
@@ -73,7 +78,11 @@ public final class EventKitTool: ToolContract, @unchecked Sendable {
                 }
             }
         }
-        guard granted else { return "Permission to access Reminders was denied by user." }
+
+        AppLogger.shared.log("Reminders permission result: granted=\(granted)", tag: "EVENTKIT")
+        guard granted else { 
+            return "Permission to access Reminders was not granted. Please allow Reminders in iOS Settings -> HermesEdge." 
+        }
 
         let reminder = EKReminder(eventStore: eventStore)
         reminder.title = title
@@ -81,6 +90,7 @@ public final class EventKitTool: ToolContract, @unchecked Sendable {
         reminder.calendar = eventStore.defaultCalendarForNewReminders()
 
         try eventStore.save(reminder, commit: true)
+        AppLogger.shared.log("Successfully saved reminder: '\(title)'", tag: "EVENTKIT")
         return "Successfully created reminder: '\(title)'"
     }
 
