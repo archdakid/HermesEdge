@@ -19,6 +19,15 @@ public struct ToolBoundarySignal: Error, Sendable {
     }
 }
 
+/// Sendable container for tool schemas crossing actor boundaries.
+public struct ToolSchemaPayload: @unchecked Sendable {
+    public let raw: [[String: Any]]
+
+    public init(_ raw: [[String: Any]]) {
+        self.raw = raw
+    }
+}
+
 /// Registry of tools available to the edge model on iOS.
 public actor ToolRegistry {
     private var tools: [String: any ToolContract] = [:]
@@ -33,8 +42,8 @@ public actor ToolRegistry {
         return tools[name]
     }
 
-    public func allSchemas() -> [[String: Any]] {
-        return tools.values.map { tool in
+    public func allSchemas() -> ToolSchemaPayload {
+        let list: [[String: Any]] = tools.values.map { tool in
             [
                 "type": "function",
                 "function": [
@@ -44,6 +53,7 @@ public actor ToolRegistry {
                 ]
             ]
         }
+        return ToolSchemaPayload(list)
     }
 
     public func executeTool(call: PendingToolCall) async throws -> String {

@@ -21,13 +21,13 @@ public protocol InferenceEngine: Sendable {
     /// Runs completion/function-calling over conversation turns with streaming.
     func generate(
         messages: [MessageEnvelope],
-        tools: [[String: Any]],
+        tools: ToolSchemaPayload,
         onToken: (@Sendable (String) -> Void)?
     ) async throws -> EngineResponse
 }
 
 public extension InferenceEngine {
-    func generate(messages: [MessageEnvelope], tools: [[String: Any]]) async throws -> EngineResponse {
+    func generate(messages: [MessageEnvelope], tools: ToolSchemaPayload) async throws -> EngineResponse {
         try await generate(messages: messages, tools: tools, onToken: nil)
     }
 }
@@ -62,7 +62,7 @@ public final class GemmaMetalEngine: InferenceEngine, @unchecked Sendable {
 
     public func generate(
         messages: [MessageEnvelope],
-        tools: [[String: Any]],
+        tools: ToolSchemaPayload,
         onToken: (@Sendable (String) -> Void)?
     ) async throws -> EngineResponse {
         toolParser.reset()
@@ -129,10 +129,10 @@ public final class GemmaMetalEngine: InferenceEngine, @unchecked Sendable {
         )
     }
 
-    private func buildHermesSystemPrompt(tools: [[String: Any]]) -> String {
+    private func buildHermesSystemPrompt(tools: ToolSchemaPayload) -> String {
         var prompt = "You are Hermes, a private and completely offline AI personal assistant running natively on Apple Silicon. You assist the user with tasks across apps on their iPhone.\n"
-        if !tools.isEmpty {
-            prompt += HermesToolParser.formatToolPrompt(schemas: tools)
+        if !tools.raw.isEmpty {
+            prompt += HermesToolParser.formatToolPrompt(schemas: tools.raw)
         }
         return prompt
     }

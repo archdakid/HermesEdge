@@ -24,7 +24,7 @@ public final class ModelManager: NSObject, ObservableObject, URLSessionDownloadD
         return URLSession(configuration: config, delegate: self, delegateQueue: nil)
     }()
 
-    public static var defaultModelLocalURL: URL {
+    public nonisolated static var defaultModelLocalURL: URL {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         let modelsDir = appSupport.appendingPathComponent("models", isDirectory: true)
         if !FileManager.default.fileExists(atPath: modelsDir.path) {
