@@ -25,6 +25,19 @@ public final class ModelManager: NSObject, ObservableObject, URLSessionDownloadD
     }()
 
     public nonisolated static var defaultModelLocalURL: URL {
+        // 1. Check user-accessible Documents directory (iTunes File Sharing / Files app)
+        if let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
+            let docFile = docs.appendingPathComponent(modelFilename)
+            if FileManager.default.fileExists(atPath: docFile.path) {
+                return docFile
+            }
+            let docSub = docs.appendingPathComponent("models").appendingPathComponent(modelFilename)
+            if FileManager.default.fileExists(atPath: docSub.path) {
+                return docSub
+            }
+        }
+
+        // 2. Default to internal Application Support directory
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         let modelsDir = appSupport.appendingPathComponent("models", isDirectory: true)
         if !FileManager.default.fileExists(atPath: modelsDir.path) {

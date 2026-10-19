@@ -206,19 +206,36 @@ struct ModelDownloadCard: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
-                Button(action: {
-                    modelManager.startDownload()
-                }) {
-                    HStack {
-                        Image(systemName: "icloud.and.arrow.down")
-                        Text("Download Model")
+                HStack(spacing: 8) {
+                    Button(action: {
+                        modelManager.startDownload()
+                    }) {
+                        HStack {
+                            Image(systemName: "icloud.and.arrow.down")
+                            Text("Download Model")
+                        }
+                        .font(.caption.bold())
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(Color.blue)
+                        .foregroundStyle(.white)
+                        .cornerRadius(8)
                     }
-                    .font(.caption.bold())
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-                    .background(Color.blue)
-                    .foregroundStyle(.white)
-                    .cornerRadius(8)
+
+                    Button(action: {
+                        modelManager.checkModelStatus()
+                    }) {
+                        HStack {
+                            Image(systemName: "arrow.clockwise")
+                            Text("Check Files")
+                        }
+                        .font(.caption.bold())
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Color(.secondarySystemBackground))
+                        .foregroundStyle(.primary)
+                        .cornerRadius(8)
+                    }
                 }
             }
 
@@ -231,6 +248,9 @@ struct ModelDownloadCard: View {
         .padding(12)
         .background(Color(.tertiarySystemBackground))
         .cornerRadius(12)
+        .onAppear {
+            modelManager.checkModelStatus()
+        }
     }
 }
 
