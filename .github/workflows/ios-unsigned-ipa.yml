@@ -26,24 +26,18 @@ jobs:
         run: |
           sudo xcode-select -s /Applications/Xcode_16.2.app || sudo xcode-select -s /Applications/Xcode_16.app || sudo xcode-select -s /Applications/Xcode.app
           xcodebuild -version
+          swift --version
 
-      - name: Build Unsigned iOS App via xcodebuild
+      - name: Build Unsigned iOS Binary via SwiftPM
         run: |
-          xcodebuild build \
-            -scheme HermesEdgeApp \
-            -destination "generic/platform=iOS" \
-            -configuration Release \
-            -derivedDataPath build \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY="" \
-            AD_HOC_CODE_SIGNING_ALLOWED=YES \
-            COMPILER_INDEX_STORE_ENABLE=NO
+          SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
+          echo "Using iOS SDK at: $SDK_PATH"
+          swift build -c release --triple arm64-apple-ios18.0 --sdk "$SDK_PATH"
 
       - name: Package Payload into HermesEdge-unsigned.ipa
         run: |
-          find build -name "HermesEdgeApp" -type f -ls
-          APP_BIN=$(find build/Build/Products -name "HermesEdgeApp" -type f | head -n 1)
+          find .build -name "HermesEdgeApp" -type f -ls
+          APP_BIN=$(find .build -name "HermesEdgeApp" -type f -perm +111 | grep -v '\.dSYM' | head -n 1)
           if [ -z "$APP_BIN" ]; then
             echo "Error: Could not locate compiled HermesEdgeApp executable"
             exit 1
