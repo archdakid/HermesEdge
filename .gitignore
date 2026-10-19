@@ -1,0 +1,9 @@
+.build/
+*.zip
+*.ipa
+*.log
+job_log.txt
+HermesEdge.xcodeproj/
+build/
+DerivedData/
+.DS_Store

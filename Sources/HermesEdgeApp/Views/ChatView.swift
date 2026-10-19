@@ -1,5 +1,4 @@
 import SwiftUI
-import HermesEdgeCore
 
 public struct ChatView: View {
     @StateObject private var modelManager = ModelManager.shared
