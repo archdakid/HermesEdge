@@ -11,7 +11,7 @@ public struct AskHermesIntent: AppIntent {
     // Configured to run in the background without launching the full app UI
     public static let openAppWhenRun: Bool = false
 
-    @Parameter(title: "Prompt", description: "What would you like Hermes to do?")
+    @Parameter(title: "Prompt", description: "What would you like Hermes to do?", requestValueDialog: IntentDialog("What would you like Hermes to do?"))
     public var prompt: String
 
     public init() {}
@@ -59,7 +59,7 @@ public struct AskHermesIntent: AppIntent {
 }
 
 /// Provides preset spoken trigger phrases for Siri so users can say:
-/// "Hey Siri, ask Hermes to create a reminder" or "Hey Siri, run with Hermes"
+/// "Hey Siri, ask Hermes to help me plan my day" or "Hey Siri, ask Hermes"
 @available(iOS 16.0, macOS 13.0, *)
 public struct HermesShortcutsProvider: AppShortcutsProvider {
     public static var appShortcuts: [AppShortcut] {
@@ -68,6 +68,9 @@ public struct HermesShortcutsProvider: AppShortcutsProvider {
             phrases: [
                 "Ask \(.applicationName) \(\.$prompt)",
                 "Tell \(.applicationName) to \(\.$prompt)",
+                "Ask \(.applicationName)",
+                "Talk to \(.applicationName)",
+                "Chat with \(.applicationName)",
                 "Run \(\.$prompt) with \(.applicationName)"
             ],
             shortTitle: "Ask Hermes",

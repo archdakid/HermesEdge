@@ -2,11 +2,13 @@ import SwiftUI
 
 public struct ChatView: View {
     @StateObject private var modelManager = ModelManager.shared
+    @StateObject private var speechManager = SpeechManager.shared
     @State private var messages: [MessageEnvelope] = []
     @State private var inputText: String = ""
     @State private var currentStatus: String = "Ready"
     @State private var isProcessing: Bool = false
     @State private var streamingText: String = ""
+    @FocusState private var isInputFocused: Bool
 
     private let agent: AgentStateMachine
     private let conversationId = "default-session"
@@ -43,8 +45,8 @@ public struct ChatView: View {
                         .padding(.top, 8)
                 }
 
-                // Status banner
-                HStack {
+                // Status Banner
+                HStack(spacing: 6) {
                     Circle()
                         .fill(isProcessing ? Color.orange : Color.green)
                         .frame(width: 8, height: 8)
@@ -52,13 +54,17 @@ public struct ChatView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Spacer()
-                    Text("Gemma 4 E4B (Metal INT4)")
-                        .font(.caption2.bold())
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Color.blue.opacity(0.12))
-                        .foregroundStyle(Color.blue)
-                        .cornerRadius(4)
+                    HStack(spacing: 4) {
+                        Image(systemName: "cpu")
+                            .font(.caption2)
+                        Text(modelManager.isModelReady ? "Gemma 4 E4B • Ready" : "A17 Pro • Offline")
+                            .font(.caption2.bold())
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(modelManager.isModelReady ? Color.green.opacity(0.15) : Color.blue.opacity(0.12))
+                    .foregroundStyle(modelManager.isModelReady ? Color.green : Color.blue)
+                    .cornerRadius(6)
                 }
                 .padding(.horizontal)
                 .padding(.vertical, 8)
@@ -68,6 +74,14 @@ public struct ChatView: View {
                 ScrollViewReader { proxy in
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 14) {
+                            if messages.isEmpty && streamingText.isEmpty {
+                                EmptyStateView(onPromptSelected: { prompt in
+                                    inputText = prompt
+                                    sendMessage()
+                                })
+                                .padding(.top, 30)
+                            }
+
                             ForEach(messages) { msg in
                                 MessageBubble(message: msg)
                             }
@@ -76,6 +90,10 @@ public struct ChatView: View {
                             }
                         }
                         .padding()
+                    }
+                    .scrollDismissesKeyboard(.interactively)
+                    .onTapGesture {
+                        isInputFocused = false
                     }
                     .onChange(of: messages.count) {
                         if let last = messages.last {
@@ -86,12 +104,35 @@ public struct ChatView: View {
 
                 Divider()
 
-                // Input Bar
-                HStack(spacing: 8) {
-                    TextField("Ask Hermes or give a command...", text: $inputText)
-                        .textFieldStyle(.roundedBorder)
+                // Polished Input Bar
+                HStack(alignment: .bottom, spacing: 8) {
+                    // Voice Dictation Button
+                    Button(action: toggleVoiceInput) {
+                        ZStack {
+                            if speechManager.isRecording {
+                                Circle()
+                                    .fill(Color.red.opacity(0.2))
+                                    .frame(width: 40, height: 40)
+                                    .scaleEffect(1.2)
+                                    .animation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true), value: speechManager.isRecording)
+                            }
+                            Image(systemName: speechManager.isRecording ? "waveform.circle.fill" : "mic.circle.fill")
+                                .font(.system(size: 32))
+                                .foregroundStyle(speechManager.isRecording ? .red : .purple)
+                        }
+                    }
+
+                    // Multiline Text Field
+                    TextField("Ask Hermes or give a command...", text: $inputText, axis: .vertical)
+                        .lineLimit(1...5)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(Color(.tertiarySystemBackground))
+                        .cornerRadius(18)
+                        .focused($isInputFocused)
                         .disabled(isProcessing)
 
+                    // Send Button
                     Button(action: sendMessage) {
                         Image(systemName: "arrow.up.circle.fill")
                             .font(.system(size: 32))
@@ -99,29 +140,72 @@ public struct ChatView: View {
                     }
                     .disabled(inputText.trimmingCharacters(in: .whitespaces).isEmpty || isProcessing)
                 }
-                .padding()
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
                 .background(Color(.systemBackground))
             }
             .navigationTitle("Hermes Edge")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button(action: {
-                        BackgroundManager.shared.enableVoiceConversationMode()
-                    }) {
-                        Image(systemName: "waveform.circle.fill")
-                            .foregroundStyle(.purple)
+                    Menu {
+                        Button(role: .destructive, action: clearMessages) {
+                            Label("Clear Chat", systemImage: "trash")
+                        }
+                        Button(action: {
+                            modelManager.checkModelStatus()
+                        }) {
+                            Label("Check Model Weights", systemImage: "arrow.clockwise")
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                            .font(.subheadline)
+                    }
+                }
+
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Done") {
+                        isInputFocused = false
+                    }
+                    .font(.body.bold())
+                }
+            }
+        }
+    }
+
+    private func toggleVoiceInput() {
+        if speechManager.isRecording {
+            speechManager.stopRecording()
+        } else {
+            speechManager.requestPermissions { authorized in
+                if authorized {
+                    speechManager.startRecording { transcription in
+                        self.inputText = transcription
                     }
                 }
             }
         }
     }
 
+    private func clearMessages() {
+        speechManager.stopSpeaking()
+        messages.removeAll()
+        streamingText = ""
+        currentStatus = "Ready"
+    }
+
     private func sendMessage() {
-        let text = inputText.trimmingCharacters(in: .whitespaces)
+        if speechManager.isRecording {
+            speechManager.stopRecording()
+        }
+        speechManager.stopSpeaking()
+
+        let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
 
         inputText = ""
+        isInputFocused = false
         isProcessing = true
         currentStatus = "Thinking..."
         streamingText = ""
@@ -146,9 +230,9 @@ public struct ChatView: View {
                         case .token(let t):
                             self.streamingText += t
                         case .toolExecuting(let name, _):
-                            self.currentStatus = "Executing tool: \(name)..."
+                            self.currentStatus = "Executing \(name)..."
                         case .toolResult(let name, _):
-                            self.currentStatus = "Completed: \(name)"
+                            self.currentStatus = "Completed \(name)"
                         case .completed:
                             self.currentStatus = "Ready"
                         default:
@@ -170,6 +254,189 @@ public struct ChatView: View {
                     self.isProcessing = false
                 }
             }
+        }
+    }
+}
+
+// MARK: - Supporting Views
+
+struct EmptyStateView: View {
+    let onPromptSelected: (String) -> Void
+
+    let suggestions = [
+        "Plan my day for high focus",
+        "Remind me to check Hermes tomorrow at 9 AM",
+        "Open WhatsApp with my latest update",
+        "What are my active reminders?"
+    ]
+
+    var body: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "sparkles")
+                .font(.system(size: 44))
+                .foregroundStyle(.blue)
+
+            Text("Hermes Edge")
+                .font(.title2.bold())
+
+            Text("100% offline on-device personal assistant powered by Gemma 4 E4B & Apple A17 Pro Metal acceleration.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 32)
+
+            VStack(spacing: 8) {
+                ForEach(suggestions, id: \.self) { suggestion in
+                    Button(action: { onPromptSelected(suggestion) }) {
+                        HStack {
+                            Text(suggestion)
+                                .font(.caption.bold())
+                                .foregroundStyle(.primary)
+                            Spacer()
+                            Image(systemName: "arrow.up.right")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        .background(Color(.secondarySystemBackground))
+                        .cornerRadius(10)
+                    }
+                }
+            }
+            .padding(.horizontal, 24)
+            .padding(.top, 8)
+        }
+    }
+}
+
+struct MessageBubble: View {
+    let message: MessageEnvelope
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            if message.role == .assistant {
+                Image(systemName: "sparkles")
+                    .font(.caption)
+                    .foregroundStyle(.white)
+                    .frame(width: 26, height: 26)
+                    .background(Color.blue)
+                    .clipShape(Circle())
+            } else {
+                Spacer()
+            }
+
+            VStack(alignment: message.role == .user ? .trailing : .leading, spacing: 6) {
+                if let calls = message.toolCalls, !calls.isEmpty {
+                    ForEach(calls) { call in
+                        ToolExecutionCard(call: call)
+                    }
+                }
+
+                if !message.content.isEmpty {
+                    Text(message.content)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        .background(message.role == .user ? Color.blue : Color(.secondarySystemBackground))
+                        .foregroundStyle(message.role == .user ? Color.white : Color.primary)
+                        .cornerRadius(16)
+                }
+
+                // Assistant Voice Playback Button
+                if message.role == .assistant && !message.content.isEmpty {
+                    Button(action: {
+                        SpeechManager.shared.speak(text: message.content)
+                    }) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "speaker.wave.2")
+                            Text("Read Aloud")
+                        }
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    }
+                    .padding(.leading, 4)
+                }
+            }
+
+            if message.role == .user {
+                Image(systemName: "person.fill")
+                    .font(.caption)
+                    .foregroundStyle(.white)
+                    .frame(width: 26, height: 26)
+                    .background(Color.gray)
+                    .clipShape(Circle())
+            }
+        }
+    }
+}
+
+struct StreamingAssistantBubble: View {
+    let text: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "sparkles")
+                .font(.caption)
+                .foregroundStyle(.white)
+                .frame(width: 26, height: 26)
+                .background(Color.blue)
+                .clipShape(Circle())
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(text)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(Color(.secondarySystemBackground))
+                    .cornerRadius(16)
+            }
+            Spacer()
+        }
+    }
+}
+
+struct ToolExecutionCard: View {
+    let call: PendingToolCall
+    @State private var isExpanded: Bool = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Image(systemName: iconForTool(call.name))
+                    .foregroundStyle(.orange)
+                Text(call.name)
+                    .font(.caption.bold())
+                Spacer()
+                Button(action: { isExpanded.toggle() }) {
+                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            if isExpanded {
+                Text(call.argumentsJson)
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .padding(6)
+                    .background(Color(.systemBackground))
+                    .cornerRadius(6)
+            }
+        }
+        .padding(8)
+        .background(Color.orange.opacity(0.12))
+        .cornerRadius(8)
+    }
+
+    private func iconForTool(_ name: String) -> String {
+        switch name {
+        case "system_calendar_reminders":
+            return "calendar.badge.clock"
+        case "siri_shortcuts_bridge":
+            return "command.square.fill"
+        case "interapp_deep_link":
+            return "link.circle.fill"
+        default:
+            return "wrench.and.screwdriver.fill"
         }
     }
 }
@@ -250,97 +517,6 @@ struct ModelDownloadCard: View {
         .cornerRadius(12)
         .onAppear {
             modelManager.checkModelStatus()
-        }
-    }
-}
-
-struct StreamingAssistantBubble: View {
-    let text: String
-
-    var body: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(text)
-                    .padding(12)
-                    .background(Color(.secondarySystemBackground))
-                    .cornerRadius(16)
-            }
-            Spacer()
-        }
-    }
-}
-
-struct MessageBubble: View {
-    let message: MessageEnvelope
-
-    var body: some View {
-        HStack {
-            if message.role == .user { Spacer() }
-
-            VStack(alignment: message.role == .user ? .trailing : .leading, spacing: 6) {
-                if let calls = message.toolCalls, !calls.isEmpty {
-                    ForEach(calls) { call in
-                        ToolExecutionCard(call: call)
-                    }
-                }
-
-                if !message.content.isEmpty {
-                    Text(message.content)
-                        .padding(12)
-                        .background(message.role == .user ? Color.blue : Color(.secondarySystemBackground))
-                        .foregroundStyle(message.role == .user ? Color.white : Color.primary)
-                        .cornerRadius(16)
-                }
-            }
-
-            if message.role != .user { Spacer() }
-        }
-    }
-}
-
-struct ToolExecutionCard: View {
-    let call: PendingToolCall
-    @State private var isExpanded: Bool = false
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 6) {
-                Image(systemName: iconForTool(call.name))
-                    .foregroundStyle(.orange)
-                Text(call.name)
-                    .font(.caption.bold())
-                Spacer()
-                Button(action: { isExpanded.toggle() }) {
-                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            if isExpanded {
-                Text(call.argumentsJson)
-                    .font(.system(.caption2, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .padding(6)
-                    .background(Color(.systemBackground))
-                    .cornerRadius(6)
-            }
-        }
-        .padding(8)
-        .background(Color.orange.opacity(0.12))
-        .cornerRadius(8)
-    }
-
-    private func iconForTool(_ name: String) -> String {
-        switch name {
-        case "system_calendar_reminders":
-            return "calendar.badge.clock"
-        case "siri_shortcuts_bridge":
-            return "command.square.fill"
-        case "interapp_deep_link":
-            return "link.circle.fill"
-        default:
-            return "wrench.and.screwdriver.fill"
         }
     }
 }

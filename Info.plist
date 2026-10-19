@@ -32,6 +32,10 @@
     <string>Hermes needs access to Reminders to create and manage reminders on your behalf.</string>
     <key>NSCalendarsUsageDescription</key>
     <string>Hermes needs access to Calendar to check and schedule your appointments.</string>
+    <key>NSSpeechRecognitionUsageDescription</key>
+    <string>Hermes uses speech recognition to transcribe your voice commands completely offline on your iPhone.</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Hermes needs microphone access for voice input and hands-free assistant conversations.</string>
     <key>UIBackgroundModes</key>
     <array>
         <string>audio</string>
