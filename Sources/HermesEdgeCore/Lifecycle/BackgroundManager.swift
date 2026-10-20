@@ -79,14 +79,14 @@ public final class BackgroundManager: @unchecked Sendable {
     @objc private func handleMemoryWarning() {
         AppLogger.shared.log("OS Memory Warning received from iOS runtime", tag: "JETSAM")
         #if canImport(UIKit)
-        let state = UIApplication.shared.applicationState
-        if state == .background {
-            AppLogger.shared.log("App is in background during memory warning. Purging edge LLM buffers to satisfy Jetsam.", tag: "JETSAM")
-            Task {
-                await engine?.purgeModelFromRAM()
+        Task { @MainActor in
+            let state = UIApplication.shared.applicationState
+            if state == .background {
+                AppLogger.shared.log("App is in background during memory warning. Purging edge LLM buffers to satisfy Jetsam.", tag: "JETSAM")
+                await self.engine?.purgeModelFromRAM()
+            } else {
+                AppLogger.shared.log("App is active in foreground. Retaining resident model context.", tag: "JETSAM")
             }
-        } else {
-            AppLogger.shared.log("App is active in foreground. Retaining resident model context.", tag: "JETSAM")
         }
         #endif
     }

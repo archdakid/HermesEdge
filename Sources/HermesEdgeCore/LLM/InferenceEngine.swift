@@ -117,10 +117,9 @@ public final class LlamaMetalEngine: InferenceEngine, @unchecked Sendable {
         var mparams = llama_model_default_params()
         // For large models (>3.2GB on iOS Unified RAM), offload 20 layers to Metal and keep the rest memory-mapped
         mparams.n_gpu_layers = isLargeModel ? 20 : 99
-        mparams.use_mmap = true
         mparams.check_tensors = false
 
-        AppLogger.shared.log("Invoking llama_model_load_from_file (n_gpu_layers=\(mparams.n_gpu_layers), use_mmap=true)...", tag: "LLAMA")
+        AppLogger.shared.log("Invoking llama_model_load_from_file (n_gpu_layers=\(mparams.n_gpu_layers))...", tag: "LLAMA")
         guard let loadedModel = llama_model_load_from_file(path, mparams) else {
             AppLogger.shared.log("Failed to load llama_model from \(path)", tag: "LLAMA")
             throw NSError(domain: "HermesEdge.Llama", code: 500, userInfo: [NSLocalizedDescriptionKey: "Failed to initialize llama_model from \(path)"])
@@ -144,7 +143,7 @@ public final class LlamaMetalEngine: InferenceEngine, @unchecked Sendable {
             cparams.n_threads_batch = 6
         }
         cparams.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_AUTO
-        self.currentBatchSize = cparams.n_batch
+        self.currentBatchSize = Int32(cparams.n_batch)
 
         AppLogger.shared.log("Invoking llama_init_from_model (n_ctx=\(cparams.n_ctx), n_batch=\(cparams.n_batch), flash_attn=auto)...", tag: "LLAMA")
         guard let loadedCtx = llama_init_from_model(loadedModel, cparams) else {
