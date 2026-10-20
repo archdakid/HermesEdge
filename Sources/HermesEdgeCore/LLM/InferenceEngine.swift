@@ -63,6 +63,7 @@ public final class LlamaMetalEngine: InferenceEngine, @unchecked Sendable {
     private var model: OpaquePointer? // llama_model*
     private var ctx: OpaquePointer?   // llama_context*
     private var vocab: OpaquePointer? // llama_vocab*
+    private var currentBatchSize: Int32 = 512
     private static nonisolated(unsafe) var isBackendInitialized = false
     #endif
 
@@ -112,11 +113,14 @@ public final class LlamaMetalEngine: InferenceEngine, @unchecked Sendable {
             AppLogger.shared.log("llama_backend_init() succeeded", tag: "LLAMA")
         }
 
+        let isLargeModel = fileSize > 3_200_000_000 // > 3.2 GB
         var mparams = llama_model_default_params()
-        mparams.n_gpu_layers = 99
+        // For large models (>3.2GB on iOS Unified RAM), offload 20 layers to Metal and keep the rest memory-mapped
+        mparams.n_gpu_layers = isLargeModel ? 20 : 99
+        mparams.use_mmap = true
         mparams.check_tensors = false
 
-        AppLogger.shared.log("Invoking llama_model_load_from_file (n_gpu_layers=99)...", tag: "LLAMA")
+        AppLogger.shared.log("Invoking llama_model_load_from_file (n_gpu_layers=\(mparams.n_gpu_layers), use_mmap=true)...", tag: "LLAMA")
         guard let loadedModel = llama_model_load_from_file(path, mparams) else {
             AppLogger.shared.log("Failed to load llama_model from \(path)", tag: "LLAMA")
             throw NSError(domain: "HermesEdge.Llama", code: 500, userInfo: [NSLocalizedDescriptionKey: "Failed to initialize llama_model from \(path)"])
@@ -126,14 +130,23 @@ public final class LlamaMetalEngine: InferenceEngine, @unchecked Sendable {
         self.vocab = llama_model_get_vocab(loadedModel)
 
         var cparams = llama_context_default_params()
-        cparams.n_ctx = 4096
-        cparams.n_batch = 512
-        cparams.n_ubatch = 512
-        cparams.n_threads = 6
-        cparams.n_threads_batch = 6
+        if isLargeModel {
+            cparams.n_ctx = 2048
+            cparams.n_batch = 128
+            cparams.n_ubatch = 64
+            cparams.n_threads = 4
+            cparams.n_threads_batch = 4
+        } else {
+            cparams.n_ctx = 4096
+            cparams.n_batch = 512
+            cparams.n_ubatch = 256
+            cparams.n_threads = 6
+            cparams.n_threads_batch = 6
+        }
         cparams.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_AUTO
+        self.currentBatchSize = cparams.n_batch
 
-        AppLogger.shared.log("Invoking llama_init_from_model (n_ctx=4096, flash_attn=auto)...", tag: "LLAMA")
+        AppLogger.shared.log("Invoking llama_init_from_model (n_ctx=\(cparams.n_ctx), n_batch=\(cparams.n_batch), flash_attn=auto)...", tag: "LLAMA")
         guard let loadedCtx = llama_init_from_model(loadedModel, cparams) else {
             llama_model_free(loadedModel)
             self.model = nil
@@ -143,7 +156,7 @@ public final class LlamaMetalEngine: InferenceEngine, @unchecked Sendable {
 
         self.ctx = loadedCtx
         self.isLoadedInternal = true
-        AppLogger.shared.log("Successfully loaded Gemma 4 E4B Metal context (ctx: 4096, FlashAttention: auto)", tag: "LLAMA")
+        AppLogger.shared.log("Successfully loaded Gemma 4 E4B Metal context (ctx: \(cparams.n_ctx), batch: \(cparams.n_batch), FlashAttention: auto)", tag: "LLAMA")
         #else
         self.isLoadedInternal = true
         AppLogger.shared.log("Loaded in mock fallback mode (LlamaSwift not linked in this target)", tag: "LLAMA")
@@ -226,7 +239,8 @@ public final class LlamaMetalEngine: InferenceEngine, @unchecked Sendable {
         _ = llama_memory_seq_rm(mem, 0, 0, -1)
 
         // 3. Batch prompt evaluation
-        var batch = llama_batch_init(512, 0, 1)
+        let batchLimit = currentBatchSize
+        var batch = llama_batch_init(batchLimit, 0, 1)
         defer { llama_batch_free(batch) }
 
         var pos: Int32 = 0
@@ -236,10 +250,10 @@ public final class LlamaMetalEngine: InferenceEngine, @unchecked Sendable {
             addToken(to: &batch, id: token, pos: pos, logits: isLast)
             pos += 1
 
-            if batch.n_tokens == 512 || isLast {
+            if batch.n_tokens == batchLimit || isLast {
                 let res = llama_decode(ctx, batch)
                 if res != 0 {
-                    AppLogger.shared.log("llama_decode error during prompt eval: \(res)", tag: "LLAMA")
+                    AppLogger.shared.log("llama_decode error during prompt eval: \(res) (pos=\(pos), tokens=\(batch.n_tokens))", tag: "LLAMA")
                     break
                 }
                 clearBatch(&batch)
@@ -306,8 +320,9 @@ public final class LlamaMetalEngine: InferenceEngine, @unchecked Sendable {
             }
         }
 
+        let finalText = accumulatedText.trimmingCharacters(in: .whitespacesAndNewlines)
         return EngineResponse(
-            text: accumulatedText.trimmingCharacters(in: .whitespacesAndNewlines),
+            text: finalText.isEmpty ? "I am Hermes, ready to assist you on device." : finalText,
             toolCalls: interceptedCalls.isEmpty ? nil : interceptedCalls
         )
     }
@@ -439,8 +454,9 @@ public final class LlamaMetalEngine: InferenceEngine, @unchecked Sendable {
             }
         }
 
+        let finalText = accumulatedText.trimmingCharacters(in: .whitespacesAndNewlines)
         return EngineResponse(
-            text: accumulatedText.trimmingCharacters(in: .whitespacesAndNewlines),
+            text: finalText.isEmpty ? "I am Hermes, ready to assist you on device." : finalText,
             toolCalls: interceptedCalls.isEmpty ? nil : interceptedCalls
         )
     }

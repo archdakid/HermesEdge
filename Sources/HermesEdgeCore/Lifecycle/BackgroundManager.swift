@@ -77,18 +77,23 @@ public final class BackgroundManager: @unchecked Sendable {
     }
 
     @objc private func handleMemoryWarning() {
-        print("[BackgroundManager] OS Memory Warning received! Purging edge LLM buffers to prevent Jetsam kill.")
-        Task {
-            await engine?.purgeModelFromRAM()
+        AppLogger.shared.log("OS Memory Warning received from iOS runtime", tag: "JETSAM")
+        #if canImport(UIKit)
+        let state = UIApplication.shared.applicationState
+        if state == .background {
+            AppLogger.shared.log("App is in background during memory warning. Purging edge LLM buffers to satisfy Jetsam.", tag: "JETSAM")
+            Task {
+                await engine?.purgeModelFromRAM()
+            }
+        } else {
+            AppLogger.shared.log("App is active in foreground. Retaining resident model context.", tag: "JETSAM")
         }
+        #endif
     }
 
     @objc private func handleAppDidEnterBackground() {
         if !isAudioSessionActive {
-            print("[BackgroundManager] App backgrounded without active voice session. Freeing inactive tensor memory.")
-            Task {
-                await engine?.purgeModelFromRAM()
-            }
+            AppLogger.shared.log("App backgrounded without active voice session. Monitoring memory.", tag: "LIFECYCLE")
         }
     }
 }

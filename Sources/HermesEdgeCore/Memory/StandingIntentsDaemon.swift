@@ -40,18 +40,20 @@ public struct StandingIntent: Identifiable, Codable, Sendable {
 public actor StandingIntentsDaemon {
     public static let shared = StandingIntentsDaemon()
 
-    private var intents: [StandingIntent] = []
+    private var intents: [StandingIntent]
 
-    private var storageURL: URL {
+    private nonisolated static var storageURL: URL {
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
         return docs.appendingPathComponent("standing_intents.json")
     }
 
     public init() {
-        loadFromDisk()
-        if intents.isEmpty {
-            bootstrapDefaultIntents()
+        var loaded = Self.loadFromDisk(url: Self.storageURL)
+        if loaded.isEmpty {
+            loaded = Self.defaultIntents()
+            Self.save(loaded, to: Self.storageURL)
         }
+        self.intents = loaded
     }
 
     /// Evaluates all registered intents and triggers execution if criteria are met.
@@ -138,7 +140,7 @@ public actor StandingIntentsDaemon {
         }
     }
 
-    private func bootstrapDefaultIntents() {
+    private nonisolated static func defaultIntents() -> [StandingIntent] {
         let morningPlanner = StandingIntent(
             title: "Morning Routine & Focus Planner",
             condition: .dailyAt(hour: 8, minute: 0),
@@ -151,22 +153,25 @@ public actor StandingIntentsDaemon {
             prompt: "Review our completed interactions today and distill key preferences or learned rules into permanent memory."
         )
 
-        intents = [morningPlanner, consolidationIntent]
-        saveToDisk()
+        return [morningPlanner, consolidationIntent]
     }
 
-    private func loadFromDisk() {
-        guard FileManager.default.fileExists(atPath: storageURL.path),
-              let data = try? Data(contentsOf: storageURL),
+    private nonisolated static func loadFromDisk(url: URL) -> [StandingIntent] {
+        guard FileManager.default.fileExists(atPath: url.path),
+              let data = try? Data(contentsOf: url),
               let decoded = try? JSONDecoder().decode([StandingIntent].self, from: data) else {
-            return
+            return []
         }
-        self.intents = decoded
+        return decoded
+    }
+
+    private nonisolated static func save(_ list: [StandingIntent], to url: URL) {
+        if let data = try? JSONEncoder().encode(list) {
+            try? data.write(to: url, options: .atomic)
+        }
     }
 
     private func saveToDisk() {
-        if let data = try? JSONEncoder().encode(intents) {
-            try? data.write(to: storageURL, options: .atomic)
-        }
+        Self.save(intents, to: Self.storageURL)
     }
 }

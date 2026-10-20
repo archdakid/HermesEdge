@@ -41,16 +41,16 @@ public struct MemoryCandidate: Identifiable, Codable, Sendable {
 public actor DreamingEngine {
     public static let shared = DreamingEngine()
 
-    private var candidates: [String: MemoryCandidate] = [:]
+    private var candidates: [String: MemoryCandidate]
     private let promotionThreshold: Double = 0.65
 
-    private var storageURL: URL {
+    private nonisolated static var storageURL: URL {
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
         return docs.appendingPathComponent("episodic_candidates.json")
     }
 
     public init() {
-        loadCandidatesFromDisk()
+        self.candidates = Self.loadCandidatesFromDisk(url: Self.storageURL)
     }
 
     /// Records an observation or stated preference from user interaction.
@@ -191,18 +191,18 @@ public actor DreamingEngine {
             .filter { $0.count > 2 }
     }
 
-    private func loadCandidatesFromDisk() {
-        guard FileManager.default.fileExists(atPath: storageURL.path),
-              let data = try? Data(contentsOf: storageURL),
+    private nonisolated static func loadCandidatesFromDisk(url: URL) -> [String: MemoryCandidate] {
+        guard FileManager.default.fileExists(atPath: url.path),
+              let data = try? Data(contentsOf: url),
               let decoded = try? JSONDecoder().decode([String: MemoryCandidate].self, from: data) else {
-            return
+            return [:]
         }
-        self.candidates = decoded
+        return decoded
     }
 
     private func saveCandidatesToDisk() {
         if let data = try? JSONEncoder().encode(candidates) {
-            try? data.write(to: storageURL, options: .atomic)
+            try? data.write(to: Self.storageURL, options: .atomic)
         }
     }
 }
