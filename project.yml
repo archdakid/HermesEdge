@@ -3,6 +3,10 @@ options:
   bundleIdPrefix: com.quincearch
   deploymentTarget:
     iOS: "18.0"
+packages:
+  LlamaSwift:
+    url: https://github.com/mattt/llama.swift
+    exact: 2.10549.0
 targets:
   HermesEdge:
     type: application
@@ -11,6 +15,9 @@ targets:
     sources:
       - path: Sources/HermesEdgeApp
       - path: Sources/HermesEdgeCore
+    dependencies:
+      - package: LlamaSwift
+        product: LlamaSwift
     info:
       path: Info.plist
     settings:
@@ -24,3 +31,10 @@ targets:
         CODE_SIGN_IDENTITY: ""
         AD_HOC_CODE_SIGNING_ALLOWED: YES
         SWIFT_VERSION: "6.0"
+        OTHER_LDFLAGS:
+          - "-framework"
+          - "Metal"
+          - "-framework"
+          - "MetalKit"
+          - "-framework"
+          - "Accelerate"
