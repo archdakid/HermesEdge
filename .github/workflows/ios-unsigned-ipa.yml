@@ -12,6 +12,7 @@ on:
       - 'project.yml'
       - 'xtool.yml'
       - 'Info.plist'
+      - 'HermesEdge-Info.plist'
       - '.github/workflows/ios-unsigned-ipa.yml'
 
 jobs:
@@ -43,6 +44,8 @@ jobs:
       - name: Generate Xcode Project
         run: |
           xcodegen generate
+          echo "Restoring full 22-key Info.plist clobbered by XcodeGen..."
+          cp HermesEdge-Info.plist Info.plist
 
       - name: Build iOS Application via xcodebuild
         run: |
@@ -101,8 +104,8 @@ jobs:
           mkdir -p ipa_stage/Payload
           cp -R "$APP_PATH" ipa_stage/Payload/
 
-          echo "=== Merging privacy keys from Info.plist into packaged app bundle ==="
-          python3 scripts/merge-plist.py Info.plist ipa_stage/Payload/HermesEdge.app/Info.plist
+          echo "=== Merging privacy keys from HermesEdge-Info.plist into packaged app bundle ==="
+          python3 scripts/merge-plist.py HermesEdge-Info.plist ipa_stage/Payload/HermesEdge.app/Info.plist
 
           echo "=== Verifying packaged Info.plist contents ==="
           cat "ipa_stage/Payload/HermesEdge.app/Info.plist"
