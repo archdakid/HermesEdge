@@ -24,6 +24,9 @@ public protocol InferenceEngine: Sendable {
     /// Unloads heavy tensor buffers to prevent Jetsam memory termination when backgrounded.
     func purgeModelFromRAM() async
 
+    /// True if the model weights and Metal context are actively resident in RAM.
+    var isModelLoaded: Bool { get }
+
     /// Runs completion/function-calling over conversation turns with streaming.
     func generate(
         messages: [MessageEnvelope],
@@ -40,9 +43,21 @@ public extension InferenceEngine {
 
 /// Production on-device edge engine using Gemma 4 E4B (4-bit) with Metal 3 acceleration and Hermes tool formatting.
 public final class LlamaMetalEngine: InferenceEngine, @unchecked Sendable {
-    public let modelURL: URL
-    private var isLoaded: Bool = false
+    public private(set) var activeModelURL: URL?
+    private let explicitModelURL: URL?
+    private var isLoadedInternal: Bool = false
     private let toolParser = HermesToolParser()
+
+    public var effectiveModelURL: URL {
+        if let explicit = explicitModelURL {
+            return explicit
+        }
+        return ModelManager.defaultModelLocalURL
+    }
+
+    public var modelURL: URL {
+        effectiveModelURL
+    }
 
     #if canImport(LlamaSwift)
     private var model: OpaquePointer? // llama_model*
@@ -51,19 +66,42 @@ public final class LlamaMetalEngine: InferenceEngine, @unchecked Sendable {
     private static nonisolated(unsafe) var isBackendInitialized = false
     #endif
 
-    public init(modelURL: URL = ModelManager.defaultModelLocalURL) {
-        self.modelURL = modelURL
+    public var isModelLoaded: Bool {
+        #if canImport(LlamaSwift)
+        return isLoadedInternal && ctx != nil
+        #else
+        return isLoadedInternal
+        #endif
+    }
+
+    public init(modelURL: URL? = nil) {
+        self.explicitModelURL = modelURL
     }
 
     public func loadModel() async throws {
-        guard !isLoaded else { return }
+        guard !isLoadedInternal else { return }
 
-        let path = modelURL.path
-        AppLogger.shared.log("Attempting to load model from: \(path)", tag: "LLAMA")
+        let targetURL = effectiveModelURL
+        self.activeModelURL = targetURL
+        let path = targetURL.path
+        let fileExists = FileManager.default.fileExists(atPath: path)
+        let fileSize = (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int64) ?? 0
+        let fileSizeMB = Double(fileSize) / (1024 * 1024)
 
-        guard FileManager.default.fileExists(atPath: path) else {
-            AppLogger.shared.log("Model file not found at \(path). Running in simulated fallback mode.", tag: "LLAMA")
-            isLoaded = true
+        if let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first,
+           let docsFiles = try? FileManager.default.contentsOfDirectory(atPath: docs.path) {
+            AppLogger.shared.log("Documents directory contents: \(docsFiles)", tag: "LLAMA")
+        }
+
+        AppLogger.shared.log("Attempting to load model from: \(path) (exists: \(fileExists), size: \(String(format: "%.1f", fileSizeMB)) MB)", tag: "LLAMA")
+
+        guard fileExists else {
+            AppLogger.shared.log("Model file not found at \(path). Running in simulated fallback mode until model file is copied into Files -> HermesEdge.", tag: "LLAMA")
+            return
+        }
+
+        if fileSize < 500_000_000 {
+            AppLogger.shared.log("Model file at \(path) is only \(String(format: "%.1f", fileSizeMB)) MB (expected ~4.9 GB). Incomplete download or placeholder.", tag: "LLAMA")
             return
         }
 
@@ -78,6 +116,7 @@ public final class LlamaMetalEngine: InferenceEngine, @unchecked Sendable {
         mparams.n_gpu_layers = 99
         mparams.check_tensors = false
 
+        AppLogger.shared.log("Invoking llama_model_load_from_file (n_gpu_layers=99)...", tag: "LLAMA")
         guard let loadedModel = llama_model_load_from_file(path, mparams) else {
             AppLogger.shared.log("Failed to load llama_model from \(path)", tag: "LLAMA")
             throw NSError(domain: "HermesEdge.Llama", code: 500, userInfo: [NSLocalizedDescriptionKey: "Failed to initialize llama_model from \(path)"])
@@ -94,6 +133,7 @@ public final class LlamaMetalEngine: InferenceEngine, @unchecked Sendable {
         cparams.n_threads_batch = 6
         cparams.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_AUTO
 
+        AppLogger.shared.log("Invoking llama_init_from_model (n_ctx=4096, flash_attn=auto)...", tag: "LLAMA")
         guard let loadedCtx = llama_init_from_model(loadedModel, cparams) else {
             llama_model_free(loadedModel)
             self.model = nil
@@ -102,10 +142,10 @@ public final class LlamaMetalEngine: InferenceEngine, @unchecked Sendable {
         }
 
         self.ctx = loadedCtx
-        self.isLoaded = true
+        self.isLoadedInternal = true
         AppLogger.shared.log("Successfully loaded Gemma 4 E4B Metal context (ctx: 4096, FlashAttention: auto)", tag: "LLAMA")
         #else
-        isLoaded = true
+        self.isLoadedInternal = true
         AppLogger.shared.log("Loaded in mock fallback mode (LlamaSwift not linked in this target)", tag: "LLAMA")
         #endif
     }
@@ -124,7 +164,7 @@ public final class LlamaMetalEngine: InferenceEngine, @unchecked Sendable {
             AppLogger.shared.log("Freed llama_model weights from Unified Memory", tag: "JETSAM")
         }
         #endif
-        isLoaded = false
+        isLoadedInternal = false
     }
 
     public func generate(
@@ -133,6 +173,11 @@ public final class LlamaMetalEngine: InferenceEngine, @unchecked Sendable {
         onToken: (@Sendable (String) -> Void)?
     ) async throws -> EngineResponse {
         toolParser.reset()
+
+        // Auto-load if not yet initialized
+        if !isLoadedInternal {
+            try? await loadModel()
+        }
 
         // 1. Check if the immediately preceding message was a TOOL RESULT
         if let lastMsg = messages.last, lastMsg.role == .tool {

@@ -35,6 +35,17 @@ public final class ModelManager: NSObject, ObservableObject, URLSessionDownloadD
             if FileManager.default.fileExists(atPath: docSub.path) {
                 return docSub
             }
+
+            // Also check for any .gguf file > 500MB directly in Documents
+            if let files = try? FileManager.default.contentsOfDirectory(atPath: docs.path) {
+                for file in files where file.hasSuffix(".gguf") {
+                    let candidate = docs.appendingPathComponent(file)
+                    let size = (try? FileManager.default.attributesOfItem(atPath: candidate.path)[.size] as? Int64) ?? 0
+                    if size > 500_000_000 {
+                        return candidate
+                    }
+                }
+            }
         }
 
         // 2. Default to internal Application Support directory
@@ -60,13 +71,15 @@ public final class ModelManager: NSObject, ObservableObject, URLSessionDownloadD
         if FileManager.default.fileExists(atPath: path) {
             if let attrs = try? FileManager.default.attributesOfItem(atPath: path),
                let size = attrs[.size] as? Int64,
-               size > 1_000_000_000 { // Must be at least ~1GB
+               size > 500_000_000 { // Must be at least ~500MB (quantized weights)
                 isModelReady = true
                 downloadProgress = 1.0
+                AppLogger.shared.log("ModelManager: Valid model detected at \(path) (\(size / (1024*1024)) MB)", tag: "MODEL")
                 return
             }
         }
         isModelReady = false
+        AppLogger.shared.log("ModelManager: No model weights found yet (checked \(path))", tag: "MODEL")
     }
 
     /// Starts streaming the 4-bit Gemma model from Hugging Face directly to local storage.

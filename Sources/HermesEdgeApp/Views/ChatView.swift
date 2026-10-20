@@ -16,11 +16,13 @@ public struct ChatView: View {
     @State private var soulMarkdownText: String = ""
     @State private var userMarkdownText: String = ""
     @State private var agentsMarkdownText: String = ""
+    @State private var isEngineLoaded: Bool = false
 
     @FocusState private var isInputFocused: Bool
 
     private let agent: AgentStateMachine
     private let memory: MemoryManager
+    private let engine: LlamaMetalEngine
 
     public init() {
         let tools = ToolRegistry()
@@ -32,11 +34,12 @@ public struct ChatView: View {
 
         let store = PersistBeforeExecuteStore()
         let memory = MemoryManager()
-        let engine = GemmaMetalEngine()
+        let engine = LlamaMetalEngine()
 
         BackgroundManager.shared.configure(engine: engine)
 
         self.memory = memory
+        self.engine = engine
         self.agent = AgentStateMachine(
             toolRegistry: tools,
             persistenceStore: store,
@@ -90,6 +93,7 @@ public struct ChatView: View {
                     status: currentStatus,
                     isProcessing: isProcessing,
                     sessionTitle: sessionManager.currentSession?.title ?? "Hermes Edge",
+                    isEngineLoaded: isEngineLoaded,
                     isModelReady: modelManager.isModelReady,
                     onOpenTopics: { showTopicDrawer = true },
                     onOpenMemory: {
@@ -136,10 +140,28 @@ public struct ChatView: View {
                 )
             }
             .sheet(isPresented: $showLogsSheet) {
-                LogsSheet()
+                LogsSheet(onReloadModel: {
+                    Task {
+                        AppLogger.shared.log("Manual reload triggered from LogsSheet", tag: "LLAMA")
+                        await engine.purgeModelFromRAM()
+                        modelManager.checkModelStatus()
+                        try? await engine.loadModel()
+                        await MainActor.run {
+                            self.isEngineLoaded = engine.isModelLoaded
+                        }
+                    }
+                })
             }
             .onAppear {
                 loadSession(sessionManager.currentSessionId)
+                modelManager.checkModelStatus()
+                Task {
+                    AppLogger.shared.log("ChatView appeared. Checking model and initializing LlamaMetalEngine...", tag: "BOOT")
+                    try? await engine.loadModel()
+                    await MainActor.run {
+                        self.isEngineLoaded = engine.isModelLoaded
+                    }
+                }
             }
         }
     }
@@ -214,12 +236,14 @@ public struct ChatView: View {
                     self.streamingText = ""
                     self.messages.append(reply)
                     self.sessionManager.saveMessages(self.messages, for: activeSessionId)
+                    self.isEngineLoaded = engine.isModelLoaded
                     self.isProcessing = false
                     self.currentStatus = "Ready"
                 }
             } catch {
                 await MainActor.run {
                     self.streamingText = ""
+                    self.isEngineLoaded = engine.isModelLoaded
                     self.currentStatus = "Error: \(error.localizedDescription)"
                     self.isProcessing = false
                 }
@@ -234,6 +258,7 @@ struct TopHeaderBar: View {
     let status: String
     let isProcessing: Bool
     let sessionTitle: String
+    let isEngineLoaded: Bool
     let isModelReady: Bool
     let onOpenTopics: () -> Void
     let onOpenMemory: () -> Void
@@ -292,9 +317,9 @@ struct TopHeaderBar: View {
                 // Model Status Chip
                 HStack(spacing: 4) {
                     Circle()
-                        .fill(isProcessing ? Color.orange : (isModelReady ? Color.green : Color.blue))
+                        .fill(isProcessing ? Color.orange : (isEngineLoaded ? Color.green : (isModelReady ? Color.yellow : Color.gray)))
                         .frame(width: 7, height: 7)
-                    Text(isModelReady ? "Gemma 4B" : "Ready")
+                    Text(isEngineLoaded ? "Gemma 4B Metal" : (isModelReady ? "Model Found" : "No Model"))
                         .font(.caption2.bold())
                 }
                 .padding(.horizontal, 7)
@@ -505,6 +530,7 @@ struct MemoryInspectorSheet: View {
 struct LogsSheet: View {
     @ObservedObject var logger = AppLogger.shared
     @Environment(\.dismiss) private var dismiss
+    var onReloadModel: (() -> Void)? = nil
 
     var body: some View {
         NavigationStack {
@@ -565,14 +591,28 @@ struct LogsSheet: View {
                 }
 
                 // Action Bar
-                HStack(spacing: 12) {
+                HStack(spacing: 8) {
                     Button(role: .destructive, action: {
                         logger.clearLogs()
                         logger.clearCrashFile()
                     }) {
-                        Label("Clear Logs", systemImage: "trash")
+                        Label("Clear", systemImage: "trash")
                             .font(.caption)
                     }
+
+                    Button(action: {
+                        onReloadModel?()
+                    }) {
+                        HStack(spacing: 3) {
+                            Image(systemName: "arrow.clockwise")
+                            Text("Reload Model")
+                        }
+                        .font(.caption2.bold())
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color(.tertiarySystemBackground))
+                    .cornerRadius(6)
 
                     Spacer()
 
