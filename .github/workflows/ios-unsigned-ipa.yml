@@ -71,10 +71,10 @@ jobs:
           cp -R "$APP_PATH" ipa_stage/Payload/
 
           echo "=== Merging privacy keys from Info.plist into packaged app bundle ==="
-          python3 -c "import plistlib; tpath='ipa_stage/Payload/HermesEdge.app/Info.plist'; target=plistlib.load(open(tpath, 'rb')); src=plistlib.load(open('Info.plist', 'rb')); target.update({k: v for k, v in src.items() if str(v) != '\$(EXECUTABLE_NAME)'}); plistlib.dump(target, open(tpath, 'wb'))"
-          
+          python3 scripts/merge-plist.py Info.plist ipa_stage/Payload/HermesEdge.app/Info.plist
+
           echo "=== Verifying packaged Info.plist contents ==="
-          plutil -p "ipa_stage/Payload/HermesEdge.app/Info.plist"
+          cat "ipa_stage/Payload/HermesEdge.app/Info.plist"
 
           cd ipa_stage
           zip -qry ../HermesEdge-unsigned.ipa Payload
