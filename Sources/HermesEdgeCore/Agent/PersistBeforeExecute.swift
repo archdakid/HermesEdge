@@ -8,7 +8,7 @@ import SQLite3
 /// across restarts via SQLite Write-Ahead Logging (WAL).
 public actor PersistBeforeExecuteStore {
     #if canImport(SQLite3)
-    private var db: OpaquePointer?
+    private nonisolated(unsafe) var db: OpaquePointer?
     #endif
     private let dbPath: URL
 
