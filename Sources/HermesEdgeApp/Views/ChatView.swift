@@ -730,7 +730,7 @@ struct LogsSheet: View {
                     Button("Test Reminder") {
                         Task {
                             let tool = EventKitTool()
-                            let res = try? await tool.execute(argumentsJson: "{\"action\": \"list_reminders\"}")
+                            let res = try? await tool.execute(argumentsJson: "{\"action\": \"create_reminder\", \"title\": \"Test Reminder from Hermes Edge\"}")
                             AppLogger.shared.log("Direct reminder test result: \(res ?? "nil")", tag: "TEST")
                         }
                     }

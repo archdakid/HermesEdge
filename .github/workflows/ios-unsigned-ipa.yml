@@ -69,6 +69,13 @@ jobs:
 
           mkdir -p ipa_stage/Payload
           cp -R "$APP_PATH" ipa_stage/Payload/
+
+          echo "=== Merging privacy keys from Info.plist into packaged app bundle ==="
+          /usr/libexec/PlistBuddy -c "Merge Info.plist" "ipa_stage/Payload/HermesEdge.app/Info.plist" || cp Info.plist "ipa_stage/Payload/HermesEdge.app/Info.plist"
+          
+          echo "=== Verifying packaged Info.plist contents ==="
+          plutil -p "ipa_stage/Payload/HermesEdge.app/Info.plist"
+
           cd ipa_stage
           zip -qry ../HermesEdge-unsigned.ipa Payload
           cd ..

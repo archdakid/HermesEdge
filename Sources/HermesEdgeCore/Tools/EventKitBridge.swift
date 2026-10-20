@@ -61,27 +61,61 @@ public final class EventKitTool: ToolContract, @unchecked Sendable {
         }
     }
 
-    private func createReminder(title: String, notes: String?) async throws -> String {
-        AppLogger.shared.log("Requesting full access to Reminders...", tag: "EVENTKIT")
-        let granted: Bool
+    private func ensureRemindersPermission() async -> Bool {
+        let status = EKEventStore.authorizationStatus(for: .reminder)
+        AppLogger.shared.log("Current Reminders authorizationStatus: \(status.rawValue)", tag: "EVENTKIT")
+        if status == .fullAccess || status == .authorized {
+            return true
+        }
+
+        AppLogger.shared.log("Requesting full access to Reminders from iOS...", tag: "EVENTKIT")
         if #available(iOS 17.0, *) {
             do {
-                granted = try await eventStore.requestFullAccessToReminders()
+                let granted = try await eventStore.requestFullAccessToReminders()
+                AppLogger.shared.log("Reminders full access request result: \(granted)", tag: "EVENTKIT")
+                return granted
             } catch {
                 AppLogger.shared.log("Reminders access error: \(error.localizedDescription)", tag: "EVENTKIT")
-                return "Error requesting reminders permission: \(error.localizedDescription)"
+                return false
             }
         } else {
-            granted = try await withCheckedThrowingContinuation { cont in
-                eventStore.requestAccess(to: .reminder) { ok, err in
-                    if let err { cont.resume(throwing: err) } else { cont.resume(returning: ok) }
+            return await withCheckedContinuation { cont in
+                eventStore.requestAccess(to: .reminder) { ok, _ in
+                    cont.resume(returning: ok)
                 }
             }
         }
+    }
 
-        AppLogger.shared.log("Reminders permission result: granted=\(granted)", tag: "EVENTKIT")
-        guard granted else { 
-            return "Permission to access Reminders was not granted. Please allow Reminders in iOS Settings -> HermesEdge." 
+    private func ensureCalendarPermission() async -> Bool {
+        let status = EKEventStore.authorizationStatus(for: .event)
+        AppLogger.shared.log("Current Calendar authorizationStatus: \(status.rawValue)", tag: "EVENTKIT")
+        if status == .fullAccess || status == .authorized {
+            return true
+        }
+
+        AppLogger.shared.log("Requesting full access to Calendar from iOS...", tag: "EVENTKIT")
+        if #available(iOS 17.0, *) {
+            do {
+                let granted = try await eventStore.requestFullAccessToEvents()
+                AppLogger.shared.log("Calendar full access request result: \(granted)", tag: "EVENTKIT")
+                return granted
+            } catch {
+                AppLogger.shared.log("Calendar access error: \(error.localizedDescription)", tag: "EVENTKIT")
+                return false
+            }
+        } else {
+            return await withCheckedContinuation { cont in
+                eventStore.requestAccess(to: .event) { ok, _ in
+                    cont.resume(returning: ok)
+                }
+            }
+        }
+    }
+
+    private func createReminder(title: String, notes: String?) async throws -> String {
+        guard await ensureRemindersPermission() else {
+            return "Permission to access Reminders was not granted. Please allow Reminders in iOS Settings -> Privacy & Security -> Reminders."
         }
 
         let reminder = EKReminder(eventStore: eventStore)
@@ -95,6 +129,10 @@ public final class EventKitTool: ToolContract, @unchecked Sendable {
     }
 
     private func listReminders() async throws -> String {
+        guard await ensureRemindersPermission() else {
+            return "Permission to access Reminders was not granted. Please allow Reminders in iOS Settings -> Privacy & Security -> Reminders."
+        }
+
         let predicate = eventStore.predicateForIncompleteReminders(withDueDateStarting: nil, ending: nil, calendars: nil)
         return await withCheckedContinuation { continuation in
             eventStore.fetchReminders(matching: predicate) { reminders in
@@ -105,6 +143,10 @@ public final class EventKitTool: ToolContract, @unchecked Sendable {
     }
 
     private func createEvent(title: String) async throws -> String {
+        guard await ensureCalendarPermission() else {
+            return "Permission to access Calendar was not granted. Please allow Calendars in iOS Settings -> Privacy & Security -> Calendars."
+        }
+
         let event = EKEvent(eventStore: eventStore)
         event.title = title
         event.startDate = Date()
@@ -112,6 +154,7 @@ public final class EventKitTool: ToolContract, @unchecked Sendable {
         event.calendar = eventStore.defaultCalendarForNewEvents
 
         try eventStore.save(event, span: .thisEvent)
+        AppLogger.shared.log("Successfully saved calendar event: '\(title)'", tag: "EVENTKIT")
         return "Created calendar event: '\(title)' for 1 hour starting now."
     }
 }

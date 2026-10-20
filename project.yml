@@ -26,6 +26,14 @@ targets:
         GENERATE_INFOPLIST_FILE: NO
         INFOPLIST_FILE: Info.plist
         TARGETED_DEVICE_FAMILY: "1"
+        INFOPLIST_KEY_NSRemindersUsageDescription: "Hermes needs access to Reminders to create and manage reminders on your behalf."
+        INFOPLIST_KEY_NSRemindersFullAccessUsageDescription: "Hermes needs full access to Reminders to create, organize, and check your tasks offline."
+        INFOPLIST_KEY_NSCalendarsUsageDescription: "Hermes needs access to Calendar to check and schedule your appointments."
+        INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription: "Hermes needs full access to Calendar to check, plan, and schedule your appointments offline."
+        INFOPLIST_KEY_NSMicrophoneUsageDescription: "Hermes needs microphone access for voice input and hands-free assistant conversations."
+        INFOPLIST_KEY_NSSpeechRecognitionUsageDescription: "Hermes uses speech recognition to transcribe your voice commands completely offline on your iPhone."
+        INFOPLIST_KEY_UIFileSharingEnabled: YES
+        INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace: YES
         CODE_SIGNING_ALLOWED: NO
         CODE_SIGNING_REQUIRED: NO
         CODE_SIGN_IDENTITY: ""
