@@ -136,7 +136,9 @@ public struct ChatView: View {
                 MemoryInspectorSheet(
                     soulContent: soulMarkdownText,
                     userContent: userMarkdownText,
-                    agentsContent: agentsMarkdownText
+                    agentsContent: agentsMarkdownText,
+                    memoryManager: memory,
+                    sessionMessages: messages
                 )
             }
             .sheet(isPresented: $showLogsSheet) {
@@ -463,35 +465,93 @@ struct TopicDrawerSheet: View {
     }
 }
 
-// MARK: - Memory Inspector Sheet (SOUL.md / USER.md / AGENTS.md)
+// MARK: - Memory Inspector Sheet (SOUL.md / USER.md / AGENTS.md / Dreaming / Intents)
 
 struct MemoryInspectorSheet: View {
-    let soulContent: String
-    let userContent: String
-    let agentsContent: String
+    @State var soulContent: String
+    @State var userContent: String
+    @State var agentsContent: String
+    let memoryManager: MemoryManager
+    let sessionMessages: [MessageEnvelope]
     @Environment(\.dismiss) private var dismiss
+
     @State private var selectedTab: Int = 0
+    @State private var isConsolidating: Bool = false
+    @State private var consolidationStatus: String? = nil
+    @State private var standingIntents: [StandingIntent] = []
 
     var body: some View {
         NavigationStack {
             VStack(spacing: 12) {
+                if let status = consolidationStatus {
+                    HStack(spacing: 6) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundStyle(.green)
+                            .font(.caption2)
+                        Text(status)
+                            .font(.caption2.bold())
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.top, 4)
+                }
+
                 Picker("Memory Scope", selection: $selectedTab) {
                     Text("USER.md").tag(0)
                     Text("SOUL.md").tag(1)
                     Text("AGENTS.md").tag(2)
+                    Text("Intents").tag(3)
                 }
                 .pickerStyle(.segmented)
                 .padding(.horizontal)
-                .padding(.top, 8)
+                .padding(.top, 4)
 
-                ScrollView {
-                    Text(currentContent)
-                        .font(.system(.caption, design: .monospaced))
-                        .padding()
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Color(.secondarySystemBackground))
-                        .cornerRadius(12)
-                        .padding(.horizontal)
+                if selectedTab == 3 {
+                    // Standing Intents Tab
+                    List {
+                        Section("Autonomous Standing Intents (OpenClaw Harness)") {
+                            ForEach(standingIntents) { intent in
+                                VStack(alignment: .leading, spacing: 4) {
+                                    HStack {
+                                        Text(intent.title)
+                                            .font(.subheadline.bold())
+                                        Spacer()
+                                        Circle()
+                                            .fill(intent.isEnabled ? Color.green : Color.gray)
+                                            .frame(width: 8, height: 8)
+                                    }
+                                    Text(intent.prompt)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                    HStack {
+                                        Text(conditionDescription(intent.condition))
+                                            .font(.caption2)
+                                            .padding(.horizontal, 6)
+                                            .padding(.vertical, 2)
+                                            .background(Color(.secondarySystemBackground))
+                                            .cornerRadius(4)
+                                        Spacer()
+                                        if let last = intent.lastTriggeredAt {
+                                            Text("Last: \(last, style: .time)")
+                                                .font(.caption2)
+                                                .foregroundStyle(.secondary)
+                                        }
+                                    }
+                                }
+                                .padding(.vertical, 2)
+                            }
+                        }
+                    }
+                    .listStyle(.insetGrouped)
+                } else {
+                    ScrollView {
+                        Text(currentContent)
+                            .font(.system(.caption, design: .monospaced))
+                            .padding()
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(Color(.secondarySystemBackground))
+                            .cornerRadius(12)
+                            .padding(.horizontal)
+                    }
                 }
 
                 // Files App Note
@@ -508,8 +568,47 @@ struct MemoryInspectorSheet: View {
             .navigationTitle("Durable Memory & Persona")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button(action: {
+                        isConsolidating = true
+                        consolidationStatus = "Consolidating memories..."
+                        Task {
+                            let res = await DreamingEngine.shared.runDreamingCycle(
+                                memoryManager: memoryManager,
+                                sessionMessages: sessionMessages
+                            )
+                            let updatedUser = await memoryManager.readUserMarkdown()
+                            let updatedSoul = await memoryManager.readSoulMarkdown()
+                            let updatedAgents = await memoryManager.readAgentsMarkdown()
+                            await MainActor.run {
+                                self.userContent = updatedUser
+                                self.soulContent = updatedSoul
+                                self.agentsContent = updatedAgents
+                                self.consolidationStatus = "Promoted: \(res.promotedCount), Pruned: \(res.prunedCount)"
+                                self.isConsolidating = false
+                            }
+                        }
+                    }) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "moon.stars.fill")
+                                .foregroundStyle(.purple)
+                            Text(isConsolidating ? "Dreaming..." : "Dream")
+                                .font(.caption.bold())
+                        }
+                    }
+                    .disabled(isConsolidating)
+                }
+
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Done") { dismiss() }
+                }
+            }
+            .onAppear {
+                Task {
+                    let intents = await StandingIntentsDaemon.shared.activeIntents()
+                    await MainActor.run {
+                        self.standingIntents = intents
+                    }
                 }
             }
         }
@@ -521,6 +620,17 @@ struct MemoryInspectorSheet: View {
         case 1: return soulContent
         case 2: return agentsContent
         default: return userContent
+        }
+    }
+
+    private func conditionDescription(_ condition: IntentCondition) -> String {
+        switch condition {
+        case .dailyAt(let h, let m):
+            return String(format: "Daily at %02d:%02d", h, m)
+        case .recurringInterval(let sec):
+            return "Every \(Int(sec / 60)) min"
+        case .eventKitReminderDue:
+            return "Reminder Trigger"
         }
     }
 }

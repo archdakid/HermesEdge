@@ -60,6 +60,22 @@ public final class BackgroundManager: @unchecked Sendable {
         #endif
     }
 
+    /// Runs OpenClaw cognitive consolidation in the background.
+    public func runDreamingConsolidation(
+        memoryManager: MemoryManager,
+        messages: [MessageEnvelope]
+    ) async -> (promotedCount: Int, prunedCount: Int) {
+        return await DreamingEngine.shared.runDreamingCycle(
+            memoryManager: memoryManager,
+            sessionMessages: messages
+        )
+    }
+
+    /// Evaluates scheduled standing intents in the background.
+    public func evaluateStandingIntents(agent: AgentStateMachine) async -> [String] {
+        return await StandingIntentsDaemon.shared.evaluateAll(agent: agent)
+    }
+
     @objc private func handleMemoryWarning() {
         print("[BackgroundManager] OS Memory Warning received! Purging edge LLM buffers to prevent Jetsam kill.")
         Task {
