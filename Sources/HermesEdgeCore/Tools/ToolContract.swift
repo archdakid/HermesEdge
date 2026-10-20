@@ -26,6 +26,14 @@ public struct ToolSchemaPayload: @unchecked Sendable {
     public init(_ raw: [[String: Any]]) {
         self.raw = raw
     }
+
+    public var schemaDescription: String {
+        guard let data = try? JSONSerialization.data(withJSONObject: raw, options: .prettyPrinted),
+              let json = String(data: data, encoding: .utf8) else {
+            return "[]"
+        }
+        return json
+    }
 }
 
 /// Registry of tools available to the edge model on iOS.

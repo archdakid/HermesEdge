@@ -48,7 +48,7 @@ public final class LlamaMetalEngine: InferenceEngine, @unchecked Sendable {
     private var model: OpaquePointer? // llama_model*
     private var ctx: OpaquePointer?   // llama_context*
     private var vocab: OpaquePointer? // llama_vocab*
-    private static var isBackendInitialized = false
+    private static nonisolated(unsafe) var isBackendInitialized = false
     #endif
 
     public init(modelURL: URL = ModelManager.defaultModelLocalURL) {
@@ -75,7 +75,7 @@ public final class LlamaMetalEngine: InferenceEngine, @unchecked Sendable {
         }
 
         var mparams = llama_model_default_params()
-        mparams.use_mmap = true
+        mparams.n_gpu_layers = 99
         mparams.check_tensors = false
 
         guard let loadedModel = llama_model_load_from_file(path, mparams) else {
@@ -92,7 +92,7 @@ public final class LlamaMetalEngine: InferenceEngine, @unchecked Sendable {
         cparams.n_ubatch = 512
         cparams.n_threads = 6
         cparams.n_threads_batch = 6
-        cparams.flash_attn = true
+        cparams.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_AUTO
 
         guard let loadedCtx = llama_init_from_model(loadedModel, cparams) else {
             llama_model_free(loadedModel)
@@ -103,7 +103,7 @@ public final class LlamaMetalEngine: InferenceEngine, @unchecked Sendable {
 
         self.ctx = loadedCtx
         self.isLoaded = true
-        AppLogger.shared.log("Successfully loaded Gemma 4 E4B Metal context (ctx: 4096, FlashAttention: true)", tag: "LLAMA")
+        AppLogger.shared.log("Successfully loaded Gemma 4 E4B Metal context (ctx: 4096, FlashAttention: auto)", tag: "LLAMA")
         #else
         isLoaded = true
         AppLogger.shared.log("Loaded in mock fallback mode (LlamaSwift not linked in this target)", tag: "LLAMA")
@@ -171,7 +171,7 @@ public final class LlamaMetalEngine: InferenceEngine, @unchecked Sendable {
         AppLogger.shared.log("Evaluating prompt with llama.cpp Metal engine (\(prompt.count) chars)", tag: "LLAMA")
 
         // 1. Tokenize prompt
-        var tokens = tokenize(vocab: vocab, text: prompt, addSpecial: true)
+        let tokens = tokenize(vocab: vocab, text: prompt, addSpecial: true)
         guard !tokens.isEmpty else {
             return EngineResponse(text: "Error: Failed to tokenize input prompt.")
         }
@@ -288,21 +288,28 @@ public final class LlamaMetalEngine: InferenceEngine, @unchecked Sendable {
         var buf = [CChar](repeating: 0, count: 64)
         let n = llama_token_to_piece(vocab, token, &buf, 64, 0, false)
         if n < 0 {
-            var larger = [CChar](repeating: 0, count: Int(-n))
-            _ = llama_token_to_piece(vocab, token, &larger, -n, 0, false)
-            return String(cString: larger)
+            var larger = [CChar](repeating: 0, count: Int(-n + 1))
+            _ = llama_token_to_piece(vocab, token, &larger, -n + 1, 0, false)
+            return larger.withUnsafeBufferPointer { ptr in
+                guard let base = ptr.baseAddress else { return "" }
+                return String(cString: base)
+            }
         }
-        buf[Int(min(n, 63))] = 0
-        return String(cString: buf)
+        return buf.withUnsafeBufferPointer { ptr in
+            guard let base = ptr.baseAddress else { return "" }
+            return String(cString: base)
+        }
     }
 
     private func addToken(to batch: inout llama_batch, id: llama_token, pos: Int32, logits: Bool) {
         let idx = Int(batch.n_tokens)
-        batch.token[idx] = id
-        batch.pos[idx] = pos
-        batch.n_seq_id[idx] = 1
-        batch.seq_id[idx][0] = 0
-        batch.logits[idx] = logits ? 1 : 0
+        batch.token?[idx] = id
+        batch.pos?[idx] = pos
+        batch.n_seq_id?[idx] = 1
+        if let seqIdPtr = batch.seq_id?[idx] {
+            seqIdPtr[0] = 0
+        }
+        batch.logits?[idx] = logits ? 1 : 0
         batch.n_tokens += 1
     }
 

@@ -17,79 +17,72 @@ public actor PersistBeforeExecuteStore {
     private var inMemoryPendingTools: [String: PendingToolCall] = [:]
 
     public init(databaseURL: URL? = nil) {
+        let path: URL
         if let databaseURL {
-            self.dbPath = databaseURL
+            path = databaseURL
         } else {
             let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
-            self.dbPath = docs.appendingPathComponent("hermes_journal.sqlite")
+            path = docs.appendingPathComponent("hermes_journal.sqlite")
         }
+        self.dbPath = path
 
         #if canImport(SQLite3)
-        openDatabase()
-        createTables()
-        loadPersistedState()
+        var database: OpaquePointer?
+        if sqlite3_open_v2(path.path, &database, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX, nil) == SQLITE_OK {
+            sqlite3_exec(database, "PRAGMA journal_mode=WAL;", nil, nil, nil)
+            sqlite3_exec(database, "PRAGMA synchronous=NORMAL;", nil, nil, nil)
+
+            let createSql = """
+            CREATE TABLE IF NOT EXISTS messages (
+                id TEXT PRIMARY KEY,
+                conversation_id TEXT NOT NULL,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                tool_calls_json TEXT,
+                tool_result_id TEXT,
+                timestamp REAL NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS pending_tools (
+                tool_id TEXT PRIMARY KEY,
+                conversation_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                arguments_json TEXT NOT NULL,
+                timestamp REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(conversation_id, timestamp);
+            """
+            sqlite3_exec(database, createSql, nil, nil, nil)
+
+            // Recover unacknowledged pending tools across crashes
+            var recovered: [String: PendingToolCall] = [:]
+            let pendingSql = "SELECT tool_id, name, arguments_json FROM pending_tools;"
+            var stmt: OpaquePointer?
+            if sqlite3_prepare_v2(database, pendingSql, -1, &stmt, nil) == SQLITE_OK {
+                while sqlite3_step(stmt) == SQLITE_ROW {
+                    if let idChars = sqlite3_column_text(stmt, 0),
+                       let nameChars = sqlite3_column_text(stmt, 1),
+                       let argsChars = sqlite3_column_text(stmt, 2) {
+                        let id = String(cString: idChars)
+                        let name = String(cString: nameChars)
+                        let args = String(cString: argsChars)
+                        let call = PendingToolCall(id: id, name: name, argumentsJson: args)
+                        recovered[id] = call
+                    }
+                }
+            }
+            sqlite3_finalize(stmt)
+            self.inMemoryPendingTools = recovered
+            self.db = database
+            AppLogger.shared.log("SQLite WAL journal ready at: \(path.lastPathComponent) (recovered \(recovered.count) pending calls)", tag: "PBE")
+        } else {
+            self.db = nil
+            AppLogger.shared.log("Failed to open SQLite database at \(path.path)", tag: "PBE")
+        }
         #endif
     }
 
-    #if canImport(SQLite3)
-    private func openDatabase() {
-        if sqlite3_open_v2(dbPath.path, &db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX, nil) == SQLITE_OK {
-            sqlite3_exec(db, "PRAGMA journal_mode=WAL;", nil, nil, nil)
-            sqlite3_exec(db, "PRAGMA synchronous=NORMAL;", nil, nil, nil)
-            AppLogger.shared.log("Opened SQLite WAL journal at: \(dbPath.lastPathComponent)", tag: "PBE")
-        } else {
-            AppLogger.shared.log("Failed to open SQLite WAL database at \(dbPath.path)", tag: "PBE")
-        }
-    }
-
-    private func createTables() {
-        let sql = """
-        CREATE TABLE IF NOT EXISTS messages (
-            id TEXT PRIMARY KEY,
-            conversation_id TEXT NOT NULL,
-            role TEXT NOT NULL,
-            content TEXT NOT NULL,
-            tool_calls_json TEXT,
-            tool_result_id TEXT,
-            timestamp REAL NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS pending_tools (
-            tool_id TEXT PRIMARY KEY,
-            conversation_id TEXT NOT NULL,
-            name TEXT NOT NULL,
-            arguments_json TEXT NOT NULL,
-            timestamp REAL NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(conversation_id, timestamp);
-        """
-        sqlite3_exec(db, sql, nil, nil, nil)
-    }
-
-    private func loadPersistedState() {
-        // 1. Recover unacknowledged pending tools from previous crash
-        let pendingSql = "SELECT tool_id, name, arguments_json FROM pending_tools;"
-        var stmt: OpaquePointer?
-        if sqlite3_prepare_v2(db, pendingSql, -1, &stmt, nil) == SQLITE_OK {
-            while sqlite3_step(stmt) == SQLITE_ROW {
-                if let idChars = sqlite3_column_text(stmt, 0),
-                   let nameChars = sqlite3_column_text(stmt, 1),
-                   let argsChars = sqlite3_column_text(stmt, 2) {
-                    let id = String(cString: idChars)
-                    let name = String(cString: nameChars)
-                    let args = String(cString: argsChars)
-                    let call = PendingToolCall(id: id, name: name, argumentsJson: args)
-                    inMemoryPendingTools[id] = call
-                    AppLogger.shared.log("Recovered unacknowledged tool call across crash: \(name) [\(id)]", tag: "RECOVERY")
-                }
-            }
-        }
-        sqlite3_finalize(stmt)
-    }
-    #endif
-
     /// Persists the model's tool-call intention BEFORE any side-effect or framework call occurs.
     public func recordPreExecution(conversationId: String, assistantMessage: MessageEnvelope) throws {
-        // Cache in memory
         var thread = inMemoryMessages[conversationId] ?? []
         thread.append(assistantMessage)
         inMemoryMessages[conversationId] = thread
@@ -103,14 +96,13 @@ public actor PersistBeforeExecuteStore {
         #if canImport(SQLite3)
         guard let db = self.db else { return }
 
-        // Persist message
         let insertMsgSql = """
         INSERT OR REPLACE INTO messages (id, conversation_id, role, content, tool_calls_json, tool_result_id, timestamp)
         VALUES (?, ?, ?, ?, ?, ?, ?);
         """
         var stmt: OpaquePointer?
         if sqlite3_prepare_v2(db, insertMsgSql, -1, &stmt, nil) == SQLITE_OK {
-            sqlite3_bind_text(stmt, 1, (assistantMessage.id.uuidString as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (assistantMessage.id as NSString).utf8String, -1, nil)
             sqlite3_bind_text(stmt, 2, (conversationId as NSString).utf8String, -1, nil)
             sqlite3_bind_text(stmt, 3, (assistantMessage.role.rawValue as NSString).utf8String, -1, nil)
             sqlite3_bind_text(stmt, 4, (assistantMessage.content as NSString).utf8String, -1, nil)
@@ -129,12 +121,11 @@ public actor PersistBeforeExecuteStore {
                 sqlite3_bind_null(stmt, 6)
             }
 
-            sqlite3_bind_double(stmt, 7, assistantMessage.timestamp.timeIntervalSince1970)
+            sqlite3_bind_double(stmt, 7, assistantMessage.createdAt.timeIntervalSince1970)
             sqlite3_step(stmt)
         }
         sqlite3_finalize(stmt)
 
-        // Persist pending tool calls to disk before execution
         if let calls = assistantMessage.toolCalls {
             for call in calls {
                 let insertToolSql = """
@@ -173,7 +164,6 @@ public actor PersistBeforeExecuteStore {
         #if canImport(SQLite3)
         guard let db = self.db else { return }
 
-        // Remove from pending_tools
         let deleteSql = "DELETE FROM pending_tools WHERE tool_id = ?;"
         var delStmt: OpaquePointer?
         if sqlite3_prepare_v2(db, deleteSql, -1, &delStmt, nil) == SQLITE_OK {
@@ -182,19 +172,18 @@ public actor PersistBeforeExecuteStore {
         }
         sqlite3_finalize(delStmt)
 
-        // Persist tool result message
         let insertMsgSql = """
         INSERT OR REPLACE INTO messages (id, conversation_id, role, content, tool_calls_json, tool_result_id, timestamp)
         VALUES (?, ?, ?, ?, NULL, ?, ?);
         """
         var stmt: OpaquePointer?
         if sqlite3_prepare_v2(db, insertMsgSql, -1, &stmt, nil) == SQLITE_OK {
-            sqlite3_bind_text(stmt, 1, (toolMessage.id.uuidString as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (toolMessage.id as NSString).utf8String, -1, nil)
             sqlite3_bind_text(stmt, 2, (conversationId as NSString).utf8String, -1, nil)
             sqlite3_bind_text(stmt, 3, (toolMessage.role.rawValue as NSString).utf8String, -1, nil)
             sqlite3_bind_text(stmt, 4, (toolMessage.content as NSString).utf8String, -1, nil)
             sqlite3_bind_text(stmt, 5, (toolCallId as NSString).utf8String, -1, nil)
-            sqlite3_bind_double(stmt, 6, toolMessage.timestamp.timeIntervalSince1970)
+            sqlite3_bind_double(stmt, 6, toolMessage.createdAt.timeIntervalSince1970)
             sqlite3_step(stmt)
         }
         sqlite3_finalize(stmt)
@@ -218,31 +207,35 @@ public actor PersistBeforeExecuteStore {
         if sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK {
             sqlite3_bind_text(stmt, 1, (conversationId as NSString).utf8String, -1, nil)
             while sqlite3_step(stmt) == SQLITE_ROW {
-                guard let idStr = sqlite3_column_text(stmt, 0).map({ String(cString: $0) }),
-                      let uuid = UUID(uuidString: idStr),
-                      let roleStr = sqlite3_column_text(stmt, 1).map({ String(cString: $0) }),
-                      let role = MessageRole(rawValue: roleStr),
-                      let content = sqlite3_column_text(stmt, 2).map({ String(cString: $0) }) else {
+                guard let idChars = sqlite3_column_text(stmt, 0),
+                      let roleChars = sqlite3_column_text(stmt, 1),
+                      let contentChars = sqlite3_column_text(stmt, 2) else {
                     continue
                 }
+                let idStr = String(cString: idChars)
+                let roleStr = String(cString: roleChars)
+                guard let role = MessageRole(rawValue: roleStr) else { continue }
+                let content = String(cString: contentChars)
 
                 var calls: [PendingToolCall]? = nil
-                if let callsJson = sqlite3_column_text(stmt, 3).map({ String(cString: $0) }),
-                   let data = callsJson.data(using: .utf8) {
-                    calls = try? JSONDecoder().decode([PendingToolCall].self, from: data)
+                if let callsChars = sqlite3_column_text(stmt, 3) {
+                    let callsJson = String(cString: callsChars)
+                    if let data = callsJson.data(using: .utf8) {
+                        calls = try? JSONDecoder().decode([PendingToolCall].self, from: data)
+                    }
                 }
 
                 let toolResultId = sqlite3_column_text(stmt, 4).map { String(cString: $0) }
                 let timestamp = Date(timeIntervalSince1970: sqlite3_column_double(stmt, 5))
 
                 let msg = MessageEnvelope(
-                    id: uuid,
+                    id: idStr,
                     conversationId: conversationId,
                     role: role,
                     content: content,
                     toolCalls: calls,
                     toolResultId: toolResultId,
-                    timestamp: timestamp
+                    createdAt: timestamp
                 )
                 fetched.append(msg)
             }
